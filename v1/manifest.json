@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Tycoon",
+  "description": "Turn everyday browsing into an idle tycoon game.",
+  "version": "1.0.0",
+  "action": {
+    "default_title": "Browser Tycoon",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/Icon14_01.png",
+    "32": "icons/Icon14_02.png",
+    "48": "icons/Icon14_03.png",
+    "128": "icons/Icon14_04.png"
+  }
+}

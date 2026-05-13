@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+  <script src="../scripts/gameMath.js"></script>
+  <script src="../scripts/storage.js"></script>
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <div class="scanlines"></div>
+  <div class="app-container">
+    <section id="tutorialOverlay" class="tutorial-overlay hidden">
+      <h1>Browser Tycoon</h1>
+      <p>Only domains assigned to slots earn money.</p>
+      <p>Fill your first empty slot with the current site, then grow it with upgrades and vault payouts.</p>
+      <p>Clear Cache later to earn permanent Cache Points.</p>
+      <button id="finishTutorialBtn" class="btn primary">Got It</button>
+    </section>
+
+    <header class="header">
+      <div class="balance" id="balanceDisplay">$0.00</div>
+      <div class="stats-row">
+        <span id="incomeDisplay">$0.00/sec</span>
+        <span id="cacheDisplay">0 CP</span>
+      </div>
+    </header>
+
+    <main id="mainView" class="view active">
+      <div class="toolbar">
+        <span>Slots</span>
+        <button id="openLibraryBtn" class="utility-btn">Library</button>
+      </div>
+      <div id="slotsList" class="slot-list"></div>
+      <button id="clearCacheBtn" class="btn prestige">Clear Cache</button>
+    </main>
+
+    <main id="pickerView" class="view">
+      <div class="view-header">
+        <button class="icon-btn" id="backFromPickerBtn">‹</button>
+        <span id="pickerTitle">Assign Slot</span>
+      </div>
+      <button id="addCurrentSiteBtn" class="slot picker-current"></button>
+      <div class="search-wrap">
+        <input type="text" id="pickerSearchInput" class="input-text" placeholder="Search library">
+      </div>
+      <div id="pickerLibraryList" class="library-list"></div>
+    </main>
+
+    <main id="detailView" class="view">
+      <div class="view-header">
+        <button class="icon-btn" id="backFromDetailBtn">‹</button>
+        <span id="detailTitle">Slot</span>
+      </div>
+      <section id="detailSummary" class="summary-card"></section>
+      <div class="buy-mode" id="buyMode">
+        <button data-mode="1" class="active">Buy 1</button>
+        <button data-mode="10">Buy 10</button>
+        <button data-mode="max">Max</button>
+      </div>
+      <div id="upgradeSections" class="upgrade-list"></div>
+      <button id="swapSlotBtn" class="btn">Swap Domain</button>
+      <button id="removeSlotBtn" class="btn danger">Remove From Slot</button>
+      <button id="upgradeTierBtn" class="btn prestige">Upgrade Slot Tier</button>
+    </main>
+
+    <main id="libraryView" class="view">
+      <div class="view-header">
+        <button class="icon-btn" id="backFromLibraryBtn">‹</button>
+        <span>Domain Library</span>
+      </div>
+      <div class="search-wrap">
+        <input type="text" id="librarySearchInput" class="input-text" placeholder="Search domains">
+      </div>
+      <div id="libraryList" class="library-list"></div>
+    </main>
+  </div>
+</body>
+</html>

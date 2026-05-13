@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Tycoon Rebuild",
+  "version": "1.0",
+  "description": "Transform your everyday browsing into an idle clicker game.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "scripts/background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/Icon14_01.png",
+      "48": "icons/Icon14_01.png",
+      "128": "icons/Icon14_01.png"
+    }
+  },
+  "icons": {
+    "16": "icons/Icon14_01.png",
+    "48": "icons/Icon14_01.png",
+    "128": "icons/Icon14_01.png"
+  }
+}
