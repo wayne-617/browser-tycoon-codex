@@ -1,5 +1,6 @@
 const BASE_RATE = 0.1;
 const VAULT_RATE = BASE_RATE * 0.5;
+const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
 const PRESTIGE_DIVISOR = 1000000;
 const ALARM_NAME = "browser-tycoon-accrual";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
@@ -10,9 +11,9 @@ const UPGRADE_DEFS = [
   { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 25, growth: 1.6, maxLevel: null },
   { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 40, growth: 1.7, maxLevel: null },
   { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 35, growth: 1.6, maxLevel: null },
-  { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 60, growth: 1.6, maxLevel: null },
-  { id: "storageDuration", name: "Storage Duration", category: "vault", baseCost: 100, growth: 1.7, maxLevel: null },
-  { id: "compoundInterest", name: "Compound Interest", category: "vault", baseCost: 200, growth: 2, maxLevel: 5 },
+  { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 60, growth: 1.55, maxLevel: null },
+  { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 80, growth: 1.55, maxLevel: null },
+  { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 50, growth: 1.42, maxLevel: null },
   { id: "windfallBonus", name: "Windfall Bonus", category: "vault", baseCost: 250, growth: 2, maxLevel: null },
   { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 50, growth: 1.6, maxLevel: null },
   { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 90, growth: 1.8, maxLevel: null },
@@ -269,15 +270,22 @@ function slotUnlockCost(slotNumber) {
 
 function vaultCap(entry) {
   const cold = getUpgradeLevel(entry, "coldStorage");
-  const duration = getUpgradeLevel(entry, "storageDuration");
   const baseCap = BASE_RATE * 60 * 60;
-  return baseCap * (1 + cold * 0.75) * (1 + duration * 0.5);
+  return baseCap * (1 + cold * 0.75);
+}
+
+function vaultRate(entry) {
+  return VAULT_RATE * Math.pow(1.18, getUpgradeLevel(entry, "storageDuration"));
+}
+
+function domainBaseRate(entry) {
+  return BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, getUpgradeLevel(entry, "trafficEngine"));
 }
 
 function activeIncomePerSecond(entry, slot) {
   const tab = 1 + 0.15 * getUpgradeLevel(entry, "tabMultiplier");
   const focus = 1 + 0.2 * getUpgradeLevel(entry, "focusBonus");
-  return BASE_RATE * tab * focus * slotTierBonus(slot);
+  return domainBaseRate(entry) * tab * focus * slotTierBonus(slot);
 }
 
 function backgroundIncomePerSecond(entry, slot, backgroundSince, now) {
@@ -287,7 +295,7 @@ function backgroundIncomePerSecond(entry, slot, backgroundSince, now) {
   const idleSeconds = Math.max(0, (now - (backgroundSince || now)) / 1000);
   const idle = 1 + 0.1 * idleLevel * Math.min(idleSeconds / 300, 5);
   const tab = 1 + 0.15 * getUpgradeLevel(entry, "tabMultiplier");
-  return BASE_RATE * tab * hum * idle * slotTierBonus(slot);
+  return domainBaseRate(entry) * tab * hum * idle * slotTierBonus(slot);
 }
 
 function domainIncomeForState(entry, slot, presence, now) {
@@ -295,10 +303,6 @@ function domainIncomeForState(entry, slot, presence, now) {
   if (presence.state === "active") return activeIncomePerSecond(entry, slot);
   if (presence.state === "background") return backgroundIncomePerSecond(entry, slot, presence.backgroundSince, now);
   return 0;
-}
-
-function compoundFactor(minutes, level) {
-  return Math.pow(1 + 0.002 * level, minutes);
 }
 
 function dailyFirstOpenBonus(entry, slot) {
@@ -311,14 +315,13 @@ function computeVaultPayout(entry, slot, now) {
   const minutesIdle = Math.max(0, (now - (entry.lastVisited || now)) / 60000);
   const hoursIdle = minutesIdle / 60;
   const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry));
-  const compound = compoundFactor(minutesIdle, getUpgradeLevel(entry, "compoundInterest"));
-  const windfall = BASE_RATE * hoursIdle * 0.1 * getUpgradeLevel(entry, "windfallBonus");
+  const windfall = domainBaseRate(entry) * hoursIdle * 0.1 * getUpgradeLevel(entry, "windfallBonus");
   const daily = entry.dailyBonusClaimedDate === TODAY() || entry.insertedOnDate === TODAY() ? 0 : dailyFirstOpenBonus(entry, slot);
   return {
-    vault: stored * compound,
+    vault: stored,
     windfall,
     daily,
-    total: stored * compound + windfall + daily
+    total: stored + windfall + daily
   };
 }
 
@@ -343,7 +346,7 @@ function settleAccrual(sync, local, now = Date.now()) {
     addEarnings(sync, entry, liveRate * elapsedSeconds);
     const cap = vaultCap(entry);
     const currentVault = sciToNumber(entry.vaultAmount);
-    const vaultGain = Math.min(cap - currentVault, VAULT_RATE * elapsedSeconds);
+    const vaultGain = Math.min(cap - currentVault, vaultRate(entry) * elapsedSeconds);
     if (vaultGain > 0) {
       entry.vaultAmount = sciAdd(entry.vaultAmount, vaultGain);
       entry.vaultLastTickTime = now;
@@ -379,7 +382,7 @@ async function rebuildPresence(sync, local) {
     else if (seen?.openCount > 0) state = "background";
     if (old?.state === "background" && state === "active" && slot) {
       const entry = getDomainEntry(local, domain);
-      addEarnings(sync, entry, BASE_RATE * 30 * getUpgradeLevel(entry, "wakeBonus") * slotTierBonus(slot));
+      addEarnings(sync, entry, domainBaseRate(entry) * 30 * getUpgradeLevel(entry, "wakeBonus") * slotTierBonus(slot));
     }
     next[domain] = {
       state,
@@ -619,6 +622,14 @@ async function devAddCachePoints(amount = 10) {
   return { ok: true, amount: value };
 }
 
+async function devResetCashAndCachePoints() {
+  const { sync, local } = await settleAndSave();
+  sync.balance = { ...SCI_ZERO };
+  sync.cachePoints = 0;
+  await saveState(sync, local);
+  return { ok: true };
+}
+
 async function navigationBonus(details) {
   if (details.frameId !== 0) return;
   const domain = normalizeDomainFromUrl(details.url);
@@ -639,7 +650,7 @@ async function navigationBonus(details) {
     await saveState(sync, local);
     return;
   }
-  const amount = dailyFirstOpenBonus(entry, slot) * 0.1 * (1 + 0.15 * level);
+  const amount = dailyFirstOpenBonus(entry, slot) * (domainBaseRate(entry) / BASE_RATE) * 0.1 * (1 + 0.15 * level);
   local.lastNavigationBonusAt[domain] = now;
   addEarnings(sync, entry, amount);
   await saveState(sync, local);
@@ -681,6 +692,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "prestige") return clearCachePrestige();
       if (message.type === "devAddCash") return devAddCash(message.amount);
       if (message.type === "devAddCachePoints") return devAddCachePoints(message.amount);
+      if (message.type === "devResetCashAndCachePoints") return devResetCashAndCachePoints();
       if (message.type === "completeOnboarding") {
         const { sync, local } = await getState();
         sync.onboardingComplete = true;

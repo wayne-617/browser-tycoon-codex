@@ -143,10 +143,10 @@ The Domain Library stores the player's intentional portfolio, not every site the
 
 - `domain: string`
 - `upgrades: Record<upgradeId, level>`
-- `vaultAmount: number`
+- `vaultAmount: ScientificCurrency`
 - `vaultLastTickTime: number`
 - `lastVisited: number`
-- `lifetimeEarned: number`
+- `lifetimeEarned: ScientificCurrency`
 - `dailyBonusClaimedDate: string | null`
 - `currentStreak: number`
 - `isSlotted: boolean`
@@ -183,21 +183,24 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
   - Intended value: around `10%` of that domain's Daily First-Open Bonus target value
   - Infinite levels
   - Growth rate: `1.6x`
+- `Traffic Engine`
+  - Increases the domain's base income before active, background, windfall, navigation, and wake calculations
+  - Infinite levels
+  - Growth rate: `1.42x`
+  - Effect scales domain base rate by `1.18x` per level
 
 #### Category B: Vault and Passive Storage
 
 - `Cold Storage`
   - Increases vault cap
   - Infinite levels
-  - Growth rate: `1.6x`
-- `Storage Duration`
-  - Extends how long a vault can keep filling before reaching cap
+  - Growth rate: `1.55x`
+- `Vault Pump`
+  - Increases the rate that vault value accumulates
+  - Uses the internal upgrade id `storageDuration` for save compatibility
   - Infinite levels
-  - Growth rate: `1.7x`
-- `Compound Interest`
-  - Grows stored vault value over time
-  - Max level: `5`
-  - Growth rate: `2.0x`
+  - Growth rate: `1.55x`
+  - Effect scales vault fill rate by `1.18x` per level
 - `Windfall Bonus`
   - Adds a revisit burst based on time since last visit
   - Infinite levels
@@ -256,10 +259,17 @@ For a slotted domain:
 
 ```txt
 income_per_sec =
-  BASE_RATE
+  domain_base_rate
   x tab_multiplier_bonus(level)
   x state_bonus
   x slot_tier_bonus(slot.tier)
+```
+
+Where:
+
+```txt
+domain_base_rate =
+  BASE_RATE x 1.18^traffic_engine_level
 ```
 
 Where `state_bonus` is exactly one of:
@@ -273,7 +283,6 @@ Where `state_bonus` is exactly one of:
 ```txt
 payout =
   min(vault_amount, computed_vault_cap)
-  x compound_interest_factor(minutes_idle, level)
   + windfall_bonus(hours_since_visit, level)
   + daily_first_open_bonus(streak, slot_streak_bonus_tier)
 ```
@@ -288,7 +297,15 @@ payout =
 - Scope: slotted domains only
 - Target tuning: one navigation payout should be about `10%` of that domain's Daily First-Open Bonus target value
 
-The exact numeric formula remains tunable, but it should stay clearly smaller than Daily First-Open and smaller than meaningful vault payouts.
+```txt
+navigation_payout =
+  daily_first_open_bonus(entry, slot)
+  x (domain_base_rate / BASE_RATE)
+  x 0.10
+  x (1 + 0.15 x navigation_bonus_level)
+```
+
+Level `0` disables the payout. Once at least one level is purchased, the payout uses the formula above.
 
 ### 4.4 Daily Rules
 
@@ -308,6 +325,14 @@ Each currently slotted domain has its own streak.
 - For v1, Daily First-Open scales from:
   - `Windfall Bonus`
   - slot `Daily Streak Bonus`
+
+```txt
+daily_first_open_bonus =
+  20
+  x (1 + 0.20 x windfall_bonus_level)
+  x (1 + 0.08 x current_streak)
+  x (1 + 0.15 x slot_streak_bonus_tier)
+```
 
 ## 5. Prestige System
 
@@ -425,8 +450,8 @@ The popup must not be the authority for income.
 
 Keep only hot, compact state:
 
-- `balance`
-- `totalLifetimeEarned`
+- `balance` as `ScientificCurrency`
+- `totalLifetimeEarned` as `ScientificCurrency`
 - `cachePoints`
 - `cpAlreadyClaimedFromLifetime`
 - `unlockedSlots`
@@ -441,6 +466,17 @@ Keep the full library and local runtime state:
 - `domainLibrary`
 - `lastAccrualAt`
 - domain presence snapshot or equivalent derived tab-state cache
+
+#### ScientificCurrency
+
+Money-like values are stored in normalized scientific form so late-game values do not overflow normal JavaScript number ranges:
+
+```txt
+ScientificCurrency = { m: mantissa, e: exponent }
+value = m x 10^e
+```
+
+The current implementation stores `balance`, `totalLifetimeEarned`, domain `vaultAmount`, and domain `lifetimeEarned` this way. Cost constants and per-second rates still use normal numbers, then convert through the scientific helpers when applied to stored balances.
 
 ### 7.4 Slot Object
 
@@ -488,9 +524,9 @@ Initial tuning targets:
 - Tab Multiplier: base `$25`, growth `1.6`
 - Focus Bonus: base `$40`, growth `1.7`
 - Navigation Bonus: base `$35`, growth `1.6`
-- Cold Storage: base `$60`, growth `1.6`
-- Storage Duration: base `$100`, growth `1.7`
-- Compound Interest: base `$200`, growth `2.0`
+- Cold Storage: base `$60`, growth `1.55`
+- Vault Pump: base `$80`, growth `1.55`
+- Traffic Engine: base `$50`, growth `1.42`
 - Windfall Bonus: base `$250`, growth `2.0`
 - Background Hum: base `$50`, growth `1.6`
 - Idle Depth: base `$90`, growth `1.8`
@@ -499,16 +535,35 @@ Initial tuning targets:
 ### 8.3 Upgrade Effect Targets
 
 ```txt
+domain_base_rate(level) = BASE_RATE x 1.18^traffic_engine_level
 tab_multiplier_bonus(level) = 1 + (0.15 x level)
 focus_bonus(level) = 1 + (0.20 x level)
-navigation_bonus(level) = DAILY_FIRST_OPEN_TARGET x 0.10 x scaling(level)
+navigation_payout(level) =
+  daily_first_open_bonus
+  x (domain_base_rate / BASE_RATE)
+  x 0.10
+  x (1 + 0.15 x navigation_bonus_level)
+
+vault_cap(level) = BASE_RATE x 60 x 60 x (1 + 0.75 x cold_storage_level)
+vault_rate(level) = BASE_RATE x 0.5 x 1.18^vault_pump_level
 
 background_hum_pct(level) = 0.05 x level
-idle_depth_bonus(t, lvl) = background_hum_pct x (1 + 0.1 x lvl x min(t / 300, 5))
+idle_depth_factor(t, lvl) = 1 + 0.1 x lvl x min(t / 300, 5)
+background_income =
+  domain_base_rate
+  x tab_multiplier_bonus
+  x background_hum_pct
+  x idle_depth_factor
+  x slot_tier_bonus
 
-compound_interest_factor(min, lvl) = (1 + 0.002 x lvl)^min
-windfall_bonus(hours, lvl) = BASE_RATE x hours x 0.1 x lvl
-wake_bonus(lvl) = BASE_RATE x 30 x lvl
+daily_first_open_bonus =
+  20
+  x (1 + 0.20 x windfall_bonus_level)
+  x (1 + 0.08 x current_streak)
+  x (1 + 0.15 x slot_streak_bonus_tier)
+
+windfall_bonus(hours, lvl) = domain_base_rate x hours x 0.1 x lvl
+wake_bonus(lvl) = domain_base_rate x 30 x lvl x slot_tier_bonus
 ```
 
 ### 8.4 Base Rate
@@ -522,15 +577,15 @@ BASE_RATE = $0.10 / sec   [TUNE]
 Vault should not outcompete live activity.
 
 ```txt
-vault_rate = BASE_RATE x 0.5   [TUNE]
+base_vault_rate = BASE_RATE x 0.5   [TUNE]
 ```
 
-Vault cap is affected by both:
+Vault cap and fill speed are affected by separate upgrades:
 
-- `Cold Storage` for amount capacity
-- `Storage Duration` for how long elapsed offline accrual can keep filling before the cap is effectively reached
+- `Cold Storage` increases total vault capacity
+- `Vault Pump` increases the per-second vault fill rate
 
-The exact implementation formula can still be tuned, but both upgrades must matter in the final math.
+This keeps storage strategy split between a larger bucket and a faster pump.
 
 ### 8.6 Balance Targets
 
@@ -678,9 +733,7 @@ Retro tech workshop / browser-operations pixel-art presentation:
 The following remain intentionally open for later balancing or implementation detail:
 
 - exact weekly milestone bonus amount
-- final formula for `Storage Duration`
 - exact global upgrade list and values
 - exact domain presence snapshot schema
-- exact numeric formula for `Navigation Bonus`
-- exact numeric formula for `Daily First-Open`
+- final balancing constants for `Navigation Bonus` and `Daily First-Open`
 - final icon-to-upgrade semantic mapping

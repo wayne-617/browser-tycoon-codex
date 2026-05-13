@@ -13,6 +13,9 @@ let toastTimer = null;
 
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
 const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
+const BASE_RATE = 0.1;
+var VAULT_RATE = BASE_RATE * 0.5;
+const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
 
 function send(type, payload = {}) {
   return chrome.runtime.sendMessage({ type, ...payload });
@@ -114,6 +117,7 @@ function patchDetail() {
   const state = stateLabel(domain);
   setText("detailVault", money(entry.vaultAmount));
   setText("detailVaultCap", money(vaultCap(entry)));
+  setText("detailVaultRate", `${money(vaultRate(entry))}/sec`);
   setText("detailState", state.text);
   setText("detailIncome", `${money(incomeFor(domain))}/sec`);
   setText("detailStreak", String(entry.currentStreak));
@@ -242,8 +246,11 @@ function upgradeCost(def, level) {
 
 function vaultCap(entry) {
   const cold = upgradeLevel(entry, "coldStorage");
-  const duration = upgradeLevel(entry, "storageDuration");
-  return 0.1 * 60 * 60 * (1 + cold * 0.75) * (1 + duration * 0.5);
+  return BASE_RATE * 60 * 60 * (1 + cold * 0.75);
+}
+
+function vaultRate(entry) {
+  return BASE_RATE * 0.5 * Math.pow(1.18, upgradeLevel(entry, "storageDuration"));
 }
 
 function tierBonus(slot) {
@@ -254,6 +261,10 @@ function tierName(tier) {
   return ["0", "I", "II", "III", "IV", "V"][tier] || String(tier);
 }
 
+function domainBaseRate(entry) {
+  return BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine"));
+}
+
 function incomeFor(domain) {
   const entry = entryFor(domain);
   const slot = currentSlot(domain);
@@ -261,13 +272,13 @@ function incomeFor(domain) {
   if (!entry || !slot || !presence) return 0;
   const tab = 1 + 0.15 * upgradeLevel(entry, "tabMultiplier");
   if (presence.state === "active") {
-    return 0.1 * tab * (1 + 0.2 * upgradeLevel(entry, "focusBonus")) * tierBonus(slot);
+    return domainBaseRate(entry) * tab * (1 + 0.2 * upgradeLevel(entry, "focusBonus")) * tierBonus(slot);
   }
   if (presence.state === "background") {
     const hum = 0.05 * upgradeLevel(entry, "backgroundHum");
     const idleSeconds = Math.max(0, (Date.now() - (presence.backgroundSince || Date.now())) / 1000);
     const idle = 1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5);
-    return 0.1 * tab * hum * idle * tierBonus(slot);
+    return domainBaseRate(entry) * tab * hum * idle * tierBonus(slot);
   }
   return 0;
 }
@@ -372,6 +383,7 @@ function renderDevButtons() {
     <div class="dev-controls">
       <button class="btn" data-action="devCash">DEV +$10K</button>
       <button class="btn btn-prestige" data-action="devPrestige">DEV +10 CP</button>
+      <button class="btn btn-danger" data-action="devReset">DEV RESET $/CP</button>
     </div>
   `;
 }
@@ -442,7 +454,8 @@ function renderDetail(domain) {
       <div class="vault-panel">
         <div class="vault-info">
           <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
-          <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | <span data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span></small>
+          <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span></small>
+          <small><span data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span></small>
           <small>STREAK: <span data-field="detailStreak">${entry.currentStreak}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
         </div>
         <button class="btn btn-collect" data-action="claim" data-domain="${domain}">COLLECT</button>
@@ -452,7 +465,7 @@ function renderDetail(domain) {
       </div>
       <div class="upgrade-list">
         <div class="helper-text" style="text-align:center;">
-          BASE INCOME: ${money(0.1)}/sec<br>
+          BASE INCOME: ${money(domainBaseRate(entry))}/sec<br>
           <span style="color:var(--primary);">CURRENT DOMAIN INCOME: <span data-field="detailCurrentIncome">${money(incomeFor(domain))}/sec</span></span>
         </div>
         ${renderUpgradeGroups(entry)}
@@ -499,19 +512,44 @@ function renderUpgrade(entry, def) {
 
 function effectSummary(id, level) {
   const next = level + 1;
+  const entry = currentDetailEntry();
+  const slot = entry ? currentSlot(entry.domain) : null;
+  const cold = upgradeLevel(entry, "coldStorage");
   const map = {
+    trafficEngine: `Base income ${money(BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, level))}/sec -> ${money(BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, next))}/sec`,
     tabMultiplier: `Live income x${(1 + 0.15 * level).toFixed(2)} -> x${(1 + 0.15 * next).toFixed(2)}`,
     focusBonus: `Focused income x${(1 + 0.2 * level).toFixed(2)} -> x${(1 + 0.2 * next).toFixed(2)}`,
-    navigationBonus: `Navigation payout level ${level}`,
-    coldStorage: `Vault cap ${money(360 * (1 + level * 0.75))}`,
-    storageDuration: `Longer vault fill window level ${level}`,
-    compoundInterest: `Stored value compound level ${level}/5`,
-    windfallBonus: `Revisit burst level ${level}`,
-    backgroundHum: `Background earns ${(5 * level).toFixed(0)}% active base`,
-    idleDepth: `Background depth level ${level}`,
-    wakeBonus: `Wake burst level ${level}`
+    navigationBonus: `Navigation payout ${money(navigationPayoutForLevel(entry, slot, level))} -> ${money(navigationPayoutForLevel(entry, slot, next))}`,
+    coldStorage: `Vault cap ${money(vaultCapForLevels(level))} -> ${money(vaultCapForLevels(next))}`,
+    storageDuration: `Vault fill rate ${money(vaultRateForLevel(level))}/sec -> ${money(vaultRateForLevel(next))}/sec`,
+    windfallBonus: `Windfall per idle hour ${money(BASE_RATE * 0.1 * level)} -> ${money(BASE_RATE * 0.1 * next)}`,
+    backgroundHum: `Background income ${(5 * level).toFixed(0)}% -> ${(5 * next).toFixed(0)}% of live base`,
+    idleDepth: `Max idle boost x${(1 + 0.5 * level).toFixed(2)} -> x${(1 + 0.5 * next).toFixed(2)}`,
+    wakeBonus: `Wake burst ${money(BASE_RATE * 30 * level)} -> ${money(BASE_RATE * 30 * next)}`
   };
   return map[id] || "";
+}
+
+function currentDetailEntry() {
+  return route.name === "detail" ? entryFor(route.domain) : null;
+}
+
+function vaultCapForLevels(cold) {
+  return BASE_RATE * 60 * 60 * (1 + cold * 0.75);
+}
+
+function vaultRateForLevel(level) {
+  return BASE_RATE * 0.5 * Math.pow(1.18, level);
+}
+
+function navigationPayoutForLevel(entry, slot, level) {
+  if (!entry || !slot || level <= 0) return 0;
+  return dailyFirstOpenBonusEstimate(entry, slot) * (domainBaseRate(entry) / BASE_RATE) * 0.1 * (1 + 0.15 * level);
+}
+
+function dailyFirstOpenBonusEstimate(entry, slot) {
+  const windfall = upgradeLevel(entry, "windfallBonus");
+  return 20 * (1 + windfall * 0.2) * (1 + entry.currentStreak * 0.08) * (1 + (slot.streakBonusTier || 0) * 0.15);
 }
 
 function renderLibrary(pickSlotId = null) {
@@ -617,6 +655,7 @@ async function handleAction(event) {
   if (action === "tier") await act("upgradeSlotTier", { slotId: Number(node.dataset.slot) });
   if (action === "devCash") await act("devAddCash", { amount: 10000 });
   if (action === "devPrestige") await act("devAddCachePoints", { amount: 10 });
+  if (action === "devReset" && confirm("Reset only current cash and CP?")) await act("devResetCashAndCachePoints");
   if (action === "remove" && confirm("Remove this domain from the slot?")) await act("removeDomain", { slotId: Number(node.dataset.slot) });
   if (action === "prestige" && confirm("Clear Cache resets cash, upgrades, vaults, and streaks for Cache Points.")) await act("prestige");
 
