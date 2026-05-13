@@ -127,7 +127,7 @@ export function renderReport(result) {
             <input name="baseRate" type="number" min="0" step="0.01" value="${economy.baseRate}">
           </label>
           <label>Vault rate
-            <input name="vaultRate" type="number" min="0" step="0.01" value="${economy.vaultRate}">
+            <input name="vaultRate" type="number" min="0" step="0.001" value="${economy.vaultRate}">
           </label>
           <label>Traffic multiplier
             <input name="trafficEngineMultiplier" type="number" min="1" step="0.01" value="${economy.trafficEngineMultiplier}">
@@ -200,9 +200,16 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 }
 
+function floorToSignificantFigures(value, figures = 2) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const scale = Math.pow(10, Math.floor(Math.log10(value)) - figures + 1);
+  return Math.floor(value / scale) * scale;
+}
+
 function slotUnlockCost(slotNumber) {
   if (slotNumber <= 3) return 0;
-  return Math.round(500 * Math.pow(5, slotNumber - 4));
+  if (slotNumber === 4) return 500;
+  return floorToSignificantFigures(500 * Math.pow(5, Math.pow(slotNumber - 3.75, 1.35)));
 }
 
 function prestigeTotalFromLifetime(lifetime, prestigeDivisor) {
@@ -247,7 +254,7 @@ function averageIdleDepthFactor(seconds) {
 }
 
 function backgroundEarnings(domain, economy, slotTier, seconds) {
-  const hum = 0.06 * level(domain, "backgroundHum");
+  const hum = 0.08 * level(domain, "backgroundHum");
   if (hum <= 0 || seconds <= 0) return 0;
   const idle = 1 + 0.1 * level(domain, "idleDepth") * averageIdleDepthFactor(seconds);
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
@@ -255,11 +262,11 @@ function backgroundEarnings(domain, economy, slotTier, seconds) {
 }
 
 function vaultCap(domain, economy) {
-  return economy.baseRate * 60 * 60 * 3 * Math.pow(1.18, level(domain, "coldStorage"));
+  return economy.baseRate * 60 * 45 * Math.pow(1.32, level(domain, "coldStorage"));
 }
 
 function vaultRate(domain, economy) {
-  return economy.vaultRate * Math.pow(1.15, level(domain, "storageDuration"));
+  return economy.vaultRate * Math.pow(1.3, level(domain, "storageDuration"));
 }
 
 function dailyFirstOpenValue(domain, economy, slotTierBonusValue) {
@@ -376,7 +383,7 @@ function simulateEconomy(economy, config) {
         }
         if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {
           const events = config.wakeEventsPerDomainPerDay / periodsPerDay;
-          addEarnings(state, domain, domainBaseRate(domain, economy) * 30 * level(domain, "wakeBonus") * tierBonus(economy, config.slotTier) * events, "wake");
+          addEarnings(state, domain, domainBaseRate(domain, economy) * 50 * level(domain, "wakeBonus") * tierBonus(economy, config.slotTier) * events, "wake");
         }
         const payout = claimVault(domain, economy, config.slotTier, currentHour, day, config.includeDailyBonus);
         addEarnings(state, domain, payout.vault, "vaultClaimed");
@@ -442,15 +449,20 @@ function incomeBreakdownTable(result, selectedDay) {
   const sources = [
     ["Focus", row.income.focus],
     ["Background", row.income.background],
-    ["Vault accrued", row.income.vaultAccrued],
     ["Vault claimed", row.income.vaultClaimed],
     ["Daily bonus", row.income.dailyBonus],
     ["Navigation", row.income.navigation],
     ["Wake", row.income.wake]
   ];
-  const totalGenerated = sources.reduce((sum, [, value]) => sum + value, 0);
-  return '<div class="day-breakdown"><div class="day-control"><label>Income details for day <input id="incomeDayInput" type="number" min="1" max="' + result.daily.length + '" step="1" value="' + day + '"></label><span class="muted">Total shown: $' + compact(totalGenerated) + '</span></div>' +
-    tableHtml(["Income Source", "Generated That Day", "Share"], sources.map(([label, value]) => [label, "$" + compact(value), totalGenerated > 0 ? (value / totalGenerated * 100).toFixed(2) + "%" : "0.00%"])) + '</div>';
+  const realizedTotal = sources.reduce((sum, [, value]) => sum + value, 0);
+  const rows = sources.map(([label, value]) => [
+    label,
+    "$" + compact(value),
+    realizedTotal > 0 ? (value / realizedTotal * 100).toFixed(2) + "%" : "0.00%"
+  ]);
+  rows.push(["Vault accrued (stored, not income)", "$" + compact(row.income.vaultAccrued), "-"]);
+  return '<div class="day-breakdown"><div class="day-control"><label>Income details for day <input id="incomeDayInput" type="number" min="1" max="' + result.daily.length + '" step="1" value="' + day + '"></label><span class="muted">Realized income: $' + compact(realizedTotal) + '</span></div>' +
+    tableHtml(["Income Source", "Generated That Day", "Share"], rows) + '</div>';
 }
 
 function renderResults(result) {

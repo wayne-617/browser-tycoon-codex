@@ -1,5 +1,5 @@
 const BASE_RATE = 0.1;
-const VAULT_RATE = BASE_RATE * 0.5;
+const VAULT_RATE = BASE_RATE * 0.08;
 const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
 const PRESTIGE_DIVISOR = 1000000;
 const ALARM_NAME = "browser-tycoon-accrual";
@@ -262,23 +262,30 @@ function upgradeCost(def, level) {
   return Math.ceil(def.baseCost * Math.pow(def.growth, level));
 }
 
+function floorToSignificantFigures(value, figures = 2) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const scale = Math.pow(10, Math.floor(Math.log10(value)) - figures + 1);
+  return Math.floor(value / scale) * scale;
+}
+
 function slotTierBonus(slot) {
   return SLOT_TIERS.find((tier) => tier.tier === slot.tier)?.bonus || 1;
 }
 
 function slotUnlockCost(slotNumber) {
   if (slotNumber <= 3) return 0;
-  return Math.round(500 * Math.pow(5, slotNumber - 4));
+  if (slotNumber === 4) return 500;
+  return floorToSignificantFigures(500 * Math.pow(5, Math.pow(slotNumber - 3.75, 1.35)));
 }
 
 function vaultCap(entry) {
   const cold = getUpgradeLevel(entry, "coldStorage");
-  const baseCap = BASE_RATE * 60 * 60 * 3;
-  return baseCap * Math.pow(1.18, cold);
+  const baseCap = BASE_RATE * 60 * 45;
+  return baseCap * Math.pow(1.32, cold);
 }
 
 function vaultRate(entry) {
-  return VAULT_RATE * Math.pow(1.15, getUpgradeLevel(entry, "storageDuration"));
+  return VAULT_RATE * Math.pow(1.3, getUpgradeLevel(entry, "storageDuration"));
 }
 
 function domainBaseRate(entry) {
@@ -292,7 +299,7 @@ function activeIncomePerSecond(entry, slot) {
 }
 
 function backgroundIncomePerSecond(entry, slot, backgroundSince, now) {
-  const hum = 0.06 * getUpgradeLevel(entry, "backgroundHum");
+  const hum = 0.08 * getUpgradeLevel(entry, "backgroundHum");
   if (hum <= 0) return 0;
   const idleLevel = getUpgradeLevel(entry, "idleDepth");
   const idleSeconds = Math.max(0, (now - (backgroundSince || now)) / 1000);
@@ -384,7 +391,7 @@ async function rebuildPresence(sync, local) {
     else if (seen?.openCount > 0) state = "background";
     if (old?.state === "background" && state === "active" && slot) {
       const entry = getDomainEntry(local, domain);
-      addEarnings(sync, entry, domainBaseRate(entry) * 30 * getUpgradeLevel(entry, "wakeBonus") * slotTierBonus(slot));
+      addEarnings(sync, entry, domainBaseRate(entry) * 50 * getUpgradeLevel(entry, "wakeBonus") * slotTierBonus(slot));
     }
     next[domain] = {
       state,

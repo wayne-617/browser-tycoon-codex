@@ -12,9 +12,16 @@ export const DEFAULT_SIM_OPTIONS = {
   slotTier: 0
 };
 
+function floorToSignificantFigures(value, figures = 2) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const scale = Math.pow(10, Math.floor(Math.log10(value)) - figures + 1);
+  return Math.floor(value / scale) * scale;
+}
+
 export function slotUnlockCost(slotNumber) {
   if (slotNumber <= 3) return 0;
-  return Math.round(500 * Math.pow(5, slotNumber - 4));
+  if (slotNumber === 4) return 500;
+  return floorToSignificantFigures(500 * Math.pow(5, Math.pow(slotNumber - 3.75, 1.35)));
 }
 
 export function prestigeTotalFromLifetime(lifetime, prestigeDivisor) {
@@ -68,7 +75,7 @@ function averageIdleDepthFactor(seconds) {
 }
 
 function backgroundEarnings(domain, economy, slotTier, seconds) {
-  const hum = 0.06 * level(domain, "backgroundHum");
+  const hum = 0.08 * level(domain, "backgroundHum");
   if (hum <= 0 || seconds <= 0) return 0;
   const idleLevel = level(domain, "idleDepth");
   const idle = 1 + 0.1 * idleLevel * averageIdleDepthFactor(seconds);
@@ -78,11 +85,11 @@ function backgroundEarnings(domain, economy, slotTier, seconds) {
 
 function vaultCap(domain, economy) {
   const cold = level(domain, "coldStorage");
-  return economy.baseRate * 60 * 60 * 3 * Math.pow(1.18, cold);
+  return economy.baseRate * 60 * 45 * Math.pow(1.32, cold);
 }
 
 function vaultRate(domain, economy) {
-  return economy.vaultRate * Math.pow(1.15, level(domain, "storageDuration"));
+  return economy.vaultRate * Math.pow(1.3, level(domain, "storageDuration"));
 }
 
 function dailyFirstOpenValue(domain, economy, slotTierBonusValue) {
@@ -243,7 +250,7 @@ export function simulateEconomy(economy, options = {}) {
 
         if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {
           const events = config.wakeEventsPerDomainPerDay / periodsPerDay;
-          const amount = domainBaseRate(domain, economy) * 30 * level(domain, "wakeBonus") * tierBonus(economy, config.slotTier) * events;
+          const amount = domainBaseRate(domain, economy) * 50 * level(domain, "wakeBonus") * tierBonus(economy, config.slotTier) * events;
           addEarnings(state, domain, amount, "wake");
         }
 

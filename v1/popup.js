@@ -3,6 +3,7 @@ let snapshot = null;
 let route = { name: "home" };
 let buyMode = "1";
 let toast = "";
+let toastType = "success";
 let search = "";
 let liveBaseBalance = 0;
 let liveBaseAt = Date.now();
@@ -14,7 +15,7 @@ let toastTimer = null;
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
 const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 const BASE_RATE = 0.1;
-var VAULT_RATE = BASE_RATE * 0.5;
+var VAULT_RATE = BASE_RATE * 0.08;
 const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
 
 function send(type, payload = {}) {
@@ -246,11 +247,11 @@ function upgradeCost(def, level) {
 
 function vaultCap(entry) {
   const cold = upgradeLevel(entry, "coldStorage");
-  return BASE_RATE * 60 * 60 * 3 * Math.pow(1.18, cold);
+  return BASE_RATE * 60 * 45 * Math.pow(1.32, cold);
 }
 
 function vaultRate(entry) {
-  return BASE_RATE * 0.5 * Math.pow(1.15, upgradeLevel(entry, "storageDuration"));
+  return BASE_RATE * 0.08 * Math.pow(1.3, upgradeLevel(entry, "storageDuration"));
 }
 
 function tierBonus(slot) {
@@ -259,6 +260,18 @@ function tierBonus(slot) {
 
 function tierName(tier) {
   return ["0", "I", "II", "III", "IV", "V"][tier] || String(tier);
+}
+
+function tierMaterial(tier) {
+  return ["STANDARD", "BRONZE", "SILVER", "GOLD", "PLATINUM", "PRISMATIC"][tier] || `TIER ${tier}`;
+}
+
+function tierClass(tier) {
+  return `slot-tier-${Math.max(0, Math.min(Number(tier) || 0, 5))}`;
+}
+
+function nextSlotTier(slot) {
+  return snapshot.slotTiers.find((tier) => tier.tier === slot.tier + 1);
 }
 
 function domainBaseRate(entry) {
@@ -275,7 +288,7 @@ function incomeFor(domain) {
     return domainBaseRate(entry) * tab * (1 + 0.3 * upgradeLevel(entry, "focusBonus")) * tierBonus(slot);
   }
   if (presence.state === "background") {
-    const hum = 0.06 * upgradeLevel(entry, "backgroundHum");
+    const hum = 0.08 * upgradeLevel(entry, "backgroundHum");
     const idleSeconds = Math.max(0, (Date.now() - (presence.backgroundSince || Date.now())) / 1000);
     const idle = 1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5);
     return domainBaseRate(entry) * tab * hum * idle * tierBonus(slot);
@@ -302,7 +315,7 @@ function shell(content, activeNav = "slots") {
     ${renderHeader()}
     ${content}
     ${renderFooter(activeNav)}
-    ${toast ? `<div class="toast">${toast}</div>` : ""}
+    ${toast ? `<div class="toast toast-${toastType}">${toast}</div>` : ""}
   `;
   app.querySelectorAll("[data-action]").forEach((node) => {
     node.addEventListener("click", handleAction);
@@ -329,11 +342,12 @@ function renderToast() {
   const existing = app.querySelector(".toast");
   if (existing) existing.remove();
   if (!toast) return;
-  app.insertAdjacentHTML("beforeend", `<div class="toast">${toast}</div>`);
+  app.insertAdjacentHTML("beforeend", `<div class="toast toast-${toastType}">${toast}</div>`);
 }
 
-function showToast(message) {
+function showToast(message, type = "success") {
   toast = message;
+  toastType = type;
   renderToast();
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
@@ -397,12 +411,12 @@ function renderSlot(slot) {
   const state = stateLabel(domain);
   const vaultReady = sciCompare(entry?.vaultAmount || 0, 0) > 0 || (entry?.dailyBonusClaimedDate !== snapshot.today && entry?.insertedOnDate !== snapshot.today);
   return `
-    <button class="slot" data-action="detail" data-domain="${domain}">
+    <button class="slot ${tierClass(slot.tier)}" data-action="detail" data-domain="${domain}">
       <div class="slot-info">
         ${favicon(domain)}
         <div>
           <div class="slot-domain">${domain} <span class="slot-state ${state.className}" data-field="slot:${domain}:state">${state.text}</span></div>
-          <div class="slot-tier">Tier ${tierName(slot.tier)} | <span data-field="slot:${domain}:income">${money(incomeFor(domain))}</span>/s | VAULT <span data-field="slot:${domain}:vault">${money(entry?.vaultAmount || 0)}</span></div>
+          <div class="slot-tier">${tierMaterial(slot.tier)} ${tierName(slot.tier)} | <span data-field="slot:${domain}:income">${money(incomeFor(domain))}</span>/s | VAULT <span data-field="slot:${domain}:vault">${money(entry?.vaultAmount || 0)}</span></div>
         </div>
       </div>
       <div class="slot-vault-ready" data-field="slot:${domain}:ready" ${vaultReady ? "" : "hidden"}>VAULT</div>
@@ -445,6 +459,7 @@ function renderDetail(domain) {
     return renderHome();
   }
   const state = stateLabel(domain);
+  const nextTier = nextSlotTier(slot);
   shell(`
     <main class="view active">
       <div class="view-header">
@@ -470,7 +485,7 @@ function renderDetail(domain) {
         </div>
         ${renderUpgradeGroups(entry)}
       </div>
-      <button class="btn btn-prestige" data-action="tier" data-slot="${slot.id}" style="width:100%; margin-top:10px;">UPGRADE TIER ${tierName(slot.tier)} (CP)</button>
+      <button class="btn btn-prestige" data-action="tier" data-slot="${slot.id}" style="width:100%; margin-top:10px;" ${nextTier ? "" : "disabled"}>${nextTier ? `UPGRADE TO ${tierMaterial(nextTier.tier)} (${nextTier.cpCost} CP)` : "SLOT MAXED"}</button>
       <button class="btn" data-action="picker" data-slot="${slot.id}" style="width:100%; margin-top:10px;">SWAP DOMAIN</button>
       <button class="btn btn-danger" data-action="remove" data-slot="${slot.id}">REMOVE FROM SLOT</button>
     </main>
@@ -523,9 +538,9 @@ function effectSummary(id, level) {
     coldStorage: `Vault cap ${money(vaultCapForLevels(level))} -> ${money(vaultCapForLevels(next))}`,
     storageDuration: `Vault fill rate ${money(vaultRateForLevel(level))}/sec -> ${money(vaultRateForLevel(next))}/sec`,
     dailyBoot: `Daily bonus x${(1 + 0.12 * Math.pow(level, 0.85)).toFixed(2)} -> x${(1 + 0.12 * Math.pow(next, 0.85)).toFixed(2)}`,
-    backgroundHum: `Background income ${(6 * level).toFixed(0)}% -> ${(6 * next).toFixed(0)}% of live base`,
+    backgroundHum: `Background income ${(8 * level).toFixed(0)}% -> ${(8 * next).toFixed(0)}% of live base`,
     idleDepth: `Max idle boost x${(1 + 0.5 * level).toFixed(2)} -> x${(1 + 0.5 * next).toFixed(2)}`,
-    wakeBonus: `Wake burst ${money(BASE_RATE * 30 * level)} -> ${money(BASE_RATE * 30 * next)}`
+    wakeBonus: `Wake burst ${money(BASE_RATE * 50 * level)} -> ${money(BASE_RATE * 50 * next)}`
   };
   return map[id] || "";
 }
@@ -535,11 +550,11 @@ function currentDetailEntry() {
 }
 
 function vaultCapForLevels(cold) {
-  return BASE_RATE * 60 * 60 * 3 * Math.pow(1.18, cold);
+  return BASE_RATE * 60 * 45 * Math.pow(1.32, cold);
 }
 
 function vaultRateForLevel(level) {
-  return BASE_RATE * 0.5 * Math.pow(1.15, level);
+  return BASE_RATE * 0.08 * Math.pow(1.3, level);
 }
 
 function navigationPayoutForLevel(entry, slot, level) {
@@ -633,6 +648,7 @@ async function handleAction(event) {
   const node = event.currentTarget;
   const action = node.dataset.action;
   toast = "";
+  toastType = "success";
 
   if (action === "home") route = { name: "home" };
   if (action === "detail") route = { name: "detail", domain: node.dataset.domain };
@@ -667,7 +683,7 @@ async function handleAction(event) {
 
 async function act(type, payload = {}) {
   const result = await send(type, payload);
-  if (!result?.ok) showToast(result?.error || "Action failed.");
+  if (!result?.ok) showToast(result?.error || "Action failed.", "warning");
   else if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${result.award} CP.`);
   else showToast("SUCCESS");
   snapshot = await send("snapshot");

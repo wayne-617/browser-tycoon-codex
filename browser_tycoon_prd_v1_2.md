@@ -114,10 +114,7 @@ Slots are the central strategic resource. Only domains assigned to a slot produc
 
 - Slots 1 to 3: free
 - Slot 4: `$500`
-- Slot 5: `$2,500`
-- Slot 6: `$12,500`
-- Slot 7: `$62,500`
-- Slot 8 and beyond: `500 x 5^(n - 4)`
+- Slot 5 and beyond: `500 x 5^((n - 3.75)^1.35)`, floored to `2` significant figures
 
 Slots with Tier I or higher purchased using prestige currency remain permanently unlocked across prestige resets. Untiered extra slots must be re-unlocked with `$` after prestige.
 

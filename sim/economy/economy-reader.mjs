@@ -8,8 +8,9 @@ function numberConst(source, name, fallback) {
   if (!match) return fallback;
   const expression = match[1].trim();
   if (/^-?\d+(?:\.\d+)?$/.test(expression)) return Number(expression);
-  if (expression === "BASE_RATE * 0.5") {
-    return numberConst(source, "BASE_RATE", 0.1) * 0.5;
+  const baseRateMultiplier = expression.match(/^BASE_RATE\s*\*\s*(-?\d+(?:\.\d+)?)$/);
+  if (baseRateMultiplier) {
+    return numberConst(source, "BASE_RATE", 0.1) * Number(baseRateMultiplier[1]);
   }
   return fallback;
 }
@@ -38,4 +39,3 @@ export async function readEconomyDefaults(backgroundPath = DEFAULT_BACKGROUND_PA
     slotTiers: arrayConst(source, "SLOT_TIERS", [{ tier: 0, cpCost: 0, bonus: 1 }])
   };
 }
-
