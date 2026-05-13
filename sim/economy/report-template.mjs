@@ -3,7 +3,6 @@ const COLORS = {
   background: "#8ce36b",
   vaultClaimed: "#ffc857",
   dailyBonus: "#ff7eb6",
-  windfall: "#c084fc",
   navigation: "#ff9f1c",
   wake: "#7bdff2"
 };
@@ -237,7 +236,7 @@ function domainBaseRate(domain, economy) {
 
 function activeRate(domain, economy, slotTier) {
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
-  const focus = 1 + 0.2 * level(domain, "focusBonus");
+  const focus = 1 + 0.3 * level(domain, "focusBonus");
   return domainBaseRate(domain, economy) * tab * focus * tierBonus(economy, slotTier);
 }
 
@@ -248,7 +247,7 @@ function averageIdleDepthFactor(seconds) {
 }
 
 function backgroundEarnings(domain, economy, slotTier, seconds) {
-  const hum = 0.05 * level(domain, "backgroundHum");
+  const hum = 0.06 * level(domain, "backgroundHum");
   if (hum <= 0 || seconds <= 0) return 0;
   const idle = 1 + 0.1 * level(domain, "idleDepth") * averageIdleDepthFactor(seconds);
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
@@ -256,30 +255,36 @@ function backgroundEarnings(domain, economy, slotTier, seconds) {
 }
 
 function vaultCap(domain, economy) {
-  return economy.baseRate * 60 * 60 * (1 + level(domain, "coldStorage") * 0.75);
+  return economy.baseRate * 60 * 60 * 3 * Math.pow(1.18, level(domain, "coldStorage"));
 }
 
 function vaultRate(domain, economy) {
-  return economy.vaultRate * Math.pow(1.18, level(domain, "storageDuration"));
+  return economy.vaultRate * Math.pow(1.15, level(domain, "storageDuration"));
 }
 
-function dailyFirstOpenBonus(domain, slotTierBonusValue, day, enabled) {
+function dailyFirstOpenValue(domain, economy, slotTierBonusValue) {
+  const dailyBoot = level(domain, "dailyBoot");
+  const baseDaily = Math.max(20, domainBaseRate(domain, economy) * 60 * 30);
+  const bootMultiplier = 1 + 0.12 * Math.pow(dailyBoot, 0.85);
+  const streakMultiplier = 1 + Math.min(domain.currentStreak, 14) * 0.04;
+  return baseDaily * bootMultiplier * streakMultiplier * slotTierBonusValue;
+}
+
+function dailyFirstOpenBonus(domain, economy, slotTierBonusValue, day, enabled) {
   if (!enabled || domain.dailyBonusClaimedDay === day) return 0;
-  return 20 * (1 + level(domain, "windfallBonus") * 0.2) * (1 + domain.currentStreak * 0.08) * slotTierBonusValue;
+  return dailyFirstOpenValue(domain, economy, slotTierBonusValue);
 }
 
 function claimVault(domain, economy, slotTier, currentHour, day, includeDailyBonus) {
-  const hoursIdle = Math.max(0, currentHour - domain.lastVisitedHour);
   const stored = Math.min(domain.vaultAmount, vaultCap(domain, economy));
-  const windfall = domainBaseRate(domain, economy) * hoursIdle * 0.1 * level(domain, "windfallBonus");
-  const daily = dailyFirstOpenBonus(domain, tierBonus(economy, slotTier), day, includeDailyBonus);
+  const daily = dailyFirstOpenBonus(domain, economy, tierBonus(economy, slotTier), day, includeDailyBonus);
   if (daily > 0) {
     domain.currentStreak += 1;
     domain.dailyBonusClaimedDay = day;
   }
   domain.lastVisitedHour = currentHour;
   domain.vaultAmount = 0;
-  return { vault: stored, windfall, daily, total: stored + windfall + daily };
+  return { vault: stored, daily, total: stored + daily };
 }
 
 function addEarnings(state, domain, amount, bucket) {
@@ -353,7 +358,7 @@ function simulateEconomy(economy, config) {
   const periodsPerDay = Math.max(1, Math.floor(config.vaultClaimsPerDay));
   const periodSeconds = 86400 / periodsPerDay;
   for (let day = 1; day <= config.days; day += 1) {
-    state.dailyBuckets = { focus: 0, background: 0, vaultAccrued: 0, vaultClaimed: 0, dailyBonus: 0, windfall: 0, navigation: 0, wake: 0 };
+    state.dailyBuckets = { focus: 0, background: 0, vaultAccrued: 0, vaultClaimed: 0, dailyBonus: 0, navigation: 0, wake: 0 };
     for (let period = 1; period <= periodsPerDay; period += 1) {
       const currentHour = (day - 1) * 24 + period * (24 / periodsPerDay);
       const domainsAtPeriodStart = state.domains.length;
@@ -366,7 +371,7 @@ function simulateEconomy(economy, config) {
         if (config.enableNavigationBonus && config.navigationEventsPerFocusedHour > 0) {
           const events = (focusSecondsPerDomain / 3600) * config.navigationEventsPerFocusedHour;
           const navLevel = level(domain, "navigationBonus");
-          const amount = navLevel > 0 ? dailyFirstOpenBonus(domain, tierBonus(economy, config.slotTier), day, false) * (domainBaseRate(domain, economy) / economy.baseRate) * 0.1 * (1 + 0.15 * navLevel) * events : 0;
+          const amount = navLevel > 0 ? dailyFirstOpenValue(domain, economy, tierBonus(economy, config.slotTier)) * 0.1 * (1 + 0.15 * navLevel) * events : 0;
           addEarnings(state, domain, amount, "navigation");
         }
         if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {
@@ -375,7 +380,6 @@ function simulateEconomy(economy, config) {
         }
         const payout = claimVault(domain, economy, config.slotTier, currentHour, day, config.includeDailyBonus);
         addEarnings(state, domain, payout.vault, "vaultClaimed");
-        addEarnings(state, domain, payout.windfall, "windfall");
         addEarnings(state, domain, payout.daily, "dailyBonus");
       }
       spendAvailableMoney(state, economy, day + period / periodsPerDay);
@@ -441,7 +445,6 @@ function incomeBreakdownTable(result, selectedDay) {
     ["Vault accrued", row.income.vaultAccrued],
     ["Vault claimed", row.income.vaultClaimed],
     ["Daily bonus", row.income.dailyBonus],
-    ["Windfall", row.income.windfall],
     ["Navigation", row.income.navigation],
     ["Wake", row.income.wake]
   ];
@@ -466,7 +469,7 @@ function renderResults(result) {
     '<div class="metric"><strong>Slots</strong><span>' + final.slots + '</span></div>' +
     '<div class="metric"><strong>Redeemable CP</strong><span>' + final.redeemablePrestige + '</span></div></div>' +
     '<section><h2>Balance And Lifetime Earnings</h2>' + lineChart(daily, [{ label: "Balance", color: "#27d3ff", value: (row) => row.balance }, { label: "Lifetime earned", color: "#ffc857", value: (row) => row.totalLifetimeEarned }]) + '</section>' +
-    '<section><h2>Daily Income Breakdown</h2>' + stackedBars(daily, ["focus", "background", "vaultClaimed", "dailyBonus", "windfall", "navigation", "wake"]) + '<div id="incomeBreakdown">' + incomeBreakdownTable(result, 1) + '</div></section>' +
+    '<section><h2>Daily Income Breakdown</h2>' + stackedBars(daily, ["focus", "background", "vaultClaimed", "dailyBonus", "navigation", "wake"]) + '<div id="incomeBreakdown">' + incomeBreakdownTable(result, 1) + '</div></section>' +
     '<section><h2>Slots And Prestige</h2>' + lineChart(daily, [{ label: "Slots", color: "#8ce36b", value: (row) => row.slots }, { label: "Redeemable CP", color: "#c084fc", value: (row) => row.redeemablePrestige }]) + '</section>' +
     '<section><h2>Slot Unlocks</h2>' + tableHtml(["Slot", "Day", "Cost"], slotRows) + '</section>' +
     '<section><h2>Prestige Milestones</h2>' + tableHtml(["Redeemable CP", "First Day Reached"], prestigeRows) + '</section>' +
@@ -487,6 +490,8 @@ function readNumber(form, name, fallback) {
 }
 
 function readConfig(form) {
+  const navigationEventsPerFocusedHour = Math.max(0, readNumber(form, "navigationEventsPerFocusedHour", 0));
+  const wakeEventsPerDomainPerDay = Math.max(0, readNumber(form, "wakeEventsPerDomainPerDay", 0));
   return {
     days: Math.max(1, Math.floor(readNumber(form, "days", 100))),
     focusMinutesPerDay: Math.max(0, readNumber(form, "focusHours", 2) * 60),
@@ -494,10 +499,10 @@ function readConfig(form) {
     vaultClaimsPerDay: Math.max(1, Math.floor(readNumber(form, "vaultClaimsPerDay", 2))),
     startingSlots: Math.max(1, Math.floor(readNumber(form, "startingSlots", 3))),
     includeDailyBonus: form.elements.includeDailyBonus.checked,
-    enableNavigationBonus: form.elements.enableNavigationBonus.checked,
-    navigationEventsPerFocusedHour: Math.max(0, readNumber(form, "navigationEventsPerFocusedHour", 0)),
-    enableWakeBonus: form.elements.enableWakeBonus.checked,
-    wakeEventsPerDomainPerDay: Math.max(0, readNumber(form, "wakeEventsPerDomainPerDay", 0)),
+    enableNavigationBonus: form.elements.enableNavigationBonus.checked || navigationEventsPerFocusedHour > 0,
+    navigationEventsPerFocusedHour,
+    enableWakeBonus: form.elements.enableWakeBonus.checked || wakeEventsPerDomainPerDay > 0,
+    wakeEventsPerDomainPerDay,
     slotTier: Math.max(0, Math.floor(readNumber(form, "slotTier", 0)))
   };
 }

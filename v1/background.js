@@ -9,13 +9,13 @@ const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 
 const UPGRADE_DEFS = [
   { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 25, growth: 1.6, maxLevel: null },
-  { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 40, growth: 1.7, maxLevel: null },
+  { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 30, growth: 1.55, maxLevel: null },
   { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 35, growth: 1.6, maxLevel: null },
   { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 60, growth: 1.55, maxLevel: null },
   { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 80, growth: 1.55, maxLevel: null },
   { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 50, growth: 1.42, maxLevel: null },
-  { id: "windfallBonus", name: "Windfall Bonus", category: "vault", baseCost: 250, growth: 2, maxLevel: null },
-  { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 50, growth: 1.6, maxLevel: null },
+  { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 120, growth: 1.7, maxLevel: null },
+  { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 40, growth: 1.55, maxLevel: null },
   { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 90, growth: 1.8, maxLevel: null },
   { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 150, growth: 2, maxLevel: null }
 ];
@@ -245,7 +245,10 @@ function getDomainEntry(local, domain) {
       slotId: null
     };
   }
-  local.domainLibrary[domain].upgrades = { ...emptyUpgrades(), ...(local.domainLibrary[domain].upgrades || {}) };
+  const upgrades = { ...(local.domainLibrary[domain].upgrades || {}) };
+  if (!upgrades.dailyBoot && upgrades.windfallBonus) upgrades.dailyBoot = upgrades.windfallBonus;
+  delete upgrades.windfallBonus;
+  local.domainLibrary[domain].upgrades = { ...emptyUpgrades(), ...upgrades };
   local.domainLibrary[domain].vaultAmount = toSci(local.domainLibrary[domain].vaultAmount);
   local.domainLibrary[domain].lifetimeEarned = toSci(local.domainLibrary[domain].lifetimeEarned);
   return local.domainLibrary[domain];
@@ -270,12 +273,12 @@ function slotUnlockCost(slotNumber) {
 
 function vaultCap(entry) {
   const cold = getUpgradeLevel(entry, "coldStorage");
-  const baseCap = BASE_RATE * 60 * 60;
-  return baseCap * (1 + cold * 0.75);
+  const baseCap = BASE_RATE * 60 * 60 * 3;
+  return baseCap * Math.pow(1.18, cold);
 }
 
 function vaultRate(entry) {
-  return VAULT_RATE * Math.pow(1.18, getUpgradeLevel(entry, "storageDuration"));
+  return VAULT_RATE * Math.pow(1.15, getUpgradeLevel(entry, "storageDuration"));
 }
 
 function domainBaseRate(entry) {
@@ -284,12 +287,12 @@ function domainBaseRate(entry) {
 
 function activeIncomePerSecond(entry, slot) {
   const tab = 1 + 0.15 * getUpgradeLevel(entry, "tabMultiplier");
-  const focus = 1 + 0.2 * getUpgradeLevel(entry, "focusBonus");
+  const focus = 1 + 0.3 * getUpgradeLevel(entry, "focusBonus");
   return domainBaseRate(entry) * tab * focus * slotTierBonus(slot);
 }
 
 function backgroundIncomePerSecond(entry, slot, backgroundSince, now) {
-  const hum = 0.05 * getUpgradeLevel(entry, "backgroundHum");
+  const hum = 0.06 * getUpgradeLevel(entry, "backgroundHum");
   if (hum <= 0) return 0;
   const idleLevel = getUpgradeLevel(entry, "idleDepth");
   const idleSeconds = Math.max(0, (now - (backgroundSince || now)) / 1000);
@@ -306,22 +309,21 @@ function domainIncomeForState(entry, slot, presence, now) {
 }
 
 function dailyFirstOpenBonus(entry, slot) {
-  const windfall = getUpgradeLevel(entry, "windfallBonus");
+  const dailyBoot = getUpgradeLevel(entry, "dailyBoot");
   const slotStreak = slot?.streakBonusTier || 0;
-  return 20 * (1 + windfall * 0.2) * (1 + entry.currentStreak * 0.08) * (1 + slotStreak * 0.15);
+  const baseDaily = Math.max(20, domainBaseRate(entry) * 60 * 30);
+  const bootMultiplier = 1 + 0.12 * Math.pow(dailyBoot, 0.85);
+  const streakMultiplier = 1 + Math.min(entry.currentStreak, 14) * 0.04;
+  return baseDaily * bootMultiplier * streakMultiplier * (1 + slotStreak * 0.15);
 }
 
 function computeVaultPayout(entry, slot, now) {
-  const minutesIdle = Math.max(0, (now - (entry.lastVisited || now)) / 60000);
-  const hoursIdle = minutesIdle / 60;
   const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry));
-  const windfall = domainBaseRate(entry) * hoursIdle * 0.1 * getUpgradeLevel(entry, "windfallBonus");
   const daily = entry.dailyBonusClaimedDate === TODAY() || entry.insertedOnDate === TODAY() ? 0 : dailyFirstOpenBonus(entry, slot);
   return {
     vault: stored,
-    windfall,
     daily,
-    total: stored + windfall + daily
+    total: stored + daily
   };
 }
 
@@ -650,7 +652,7 @@ async function navigationBonus(details) {
     await saveState(sync, local);
     return;
   }
-  const amount = dailyFirstOpenBonus(entry, slot) * (domainBaseRate(entry) / BASE_RATE) * 0.1 * (1 + 0.15 * level);
+  const amount = dailyFirstOpenBonus(entry, slot) * 0.1 * (1 + 0.15 * level);
   local.lastNavigationBonusAt[domain] = now;
   addEarnings(sync, entry, amount);
   await saveState(sync, local);

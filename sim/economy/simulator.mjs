@@ -1,14 +1,14 @@
 export const DEFAULT_SIM_OPTIONS = {
-  days: 100,
+  days: 30,
   focusMinutesPerDay: 120,
-  backgroundMinutesPerOtherSlotPerDay: 15,
+  backgroundMinutesPerOtherSlotPerDay: 30,
   vaultClaimsPerDay: 2,
   startingSlots: 3,
   includeDailyBonus: true,
-  enableNavigationBonus: false,
-  navigationEventsPerFocusedHour: 0,
-  enableWakeBonus: false,
-  wakeEventsPerDomainPerDay: 0,
+  enableNavigationBonus: true,
+  navigationEventsPerFocusedHour: 5,
+  enableWakeBonus: true,
+  wakeEventsPerDomainPerDay: 1,
   slotTier: 0
 };
 
@@ -56,7 +56,7 @@ function domainBaseRate(domain, economy) {
 
 function activeRate(domain, economy, slotTier) {
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
-  const focus = 1 + 0.2 * level(domain, "focusBonus");
+  const focus = 1 + 0.3 * level(domain, "focusBonus");
   return domainBaseRate(domain, economy) * tab * focus * tierBonus(economy, slotTier);
 }
 
@@ -68,7 +68,7 @@ function averageIdleDepthFactor(seconds) {
 }
 
 function backgroundEarnings(domain, economy, slotTier, seconds) {
-  const hum = 0.05 * level(domain, "backgroundHum");
+  const hum = 0.06 * level(domain, "backgroundHum");
   if (hum <= 0 || seconds <= 0) return 0;
   const idleLevel = level(domain, "idleDepth");
   const idle = 1 + 0.1 * idleLevel * averageIdleDepthFactor(seconds);
@@ -78,25 +78,30 @@ function backgroundEarnings(domain, economy, slotTier, seconds) {
 
 function vaultCap(domain, economy) {
   const cold = level(domain, "coldStorage");
-  return economy.baseRate * 60 * 60 * (1 + cold * 0.75);
+  return economy.baseRate * 60 * 60 * 3 * Math.pow(1.18, cold);
 }
 
 function vaultRate(domain, economy) {
-  return economy.vaultRate * Math.pow(1.18, level(domain, "storageDuration"));
+  return economy.vaultRate * Math.pow(1.15, level(domain, "storageDuration"));
 }
 
-function dailyFirstOpenBonus(domain, slotTierBonusValue, day, enabled) {
+function dailyFirstOpenValue(domain, economy, slotTierBonusValue) {
+  const dailyBoot = level(domain, "dailyBoot");
+  const baseDaily = Math.max(20, domainBaseRate(domain, economy) * 60 * 30);
+  const bootMultiplier = 1 + 0.12 * Math.pow(dailyBoot, 0.85);
+  const streakMultiplier = 1 + Math.min(domain.currentStreak, 14) * 0.04;
+  return baseDaily * bootMultiplier * streakMultiplier * slotTierBonusValue;
+}
+
+function dailyFirstOpenBonus(domain, economy, slotTierBonusValue, day, enabled) {
   if (!enabled || domain.dailyBonusClaimedDay === day) return 0;
-  const windfall = level(domain, "windfallBonus");
-  return 20 * (1 + windfall * 0.2) * (1 + domain.currentStreak * 0.08) * slotTierBonusValue;
+  return dailyFirstOpenValue(domain, economy, slotTierBonusValue);
 }
 
 function claimVault(domain, economy, slotTier, currentHour, day, includeDailyBonus) {
-  const hoursIdle = Math.max(0, currentHour - domain.lastVisitedHour);
   const slotBonus = tierBonus(economy, slotTier);
   const stored = Math.min(domain.vaultAmount, vaultCap(domain, economy));
-  const windfall = domainBaseRate(domain, economy) * hoursIdle * 0.1 * level(domain, "windfallBonus");
-  const daily = dailyFirstOpenBonus(domain, slotBonus, day, includeDailyBonus);
+  const daily = dailyFirstOpenBonus(domain, economy, slotBonus, day, includeDailyBonus);
 
   if (daily > 0) {
     domain.currentStreak += 1;
@@ -105,7 +110,7 @@ function claimVault(domain, economy, slotTier, currentHour, day, includeDailyBon
 
   domain.lastVisitedHour = currentHour;
   domain.vaultAmount = 0;
-  return { vault: stored, windfall, daily, total: stored + windfall + daily };
+  return { vault: stored, daily, total: stored + daily };
 }
 
 function addEarnings(state, domain, amount, bucket) {
@@ -208,7 +213,6 @@ export function simulateEconomy(economy, options = {}) {
       vaultAccrued: 0,
       vaultClaimed: 0,
       dailyBonus: 0,
-      windfall: 0,
       navigation: 0,
       wake: 0
     };
@@ -232,7 +236,7 @@ export function simulateEconomy(economy, options = {}) {
           const events = (focusSecondsPerDomain / 3600) * config.navigationEventsPerFocusedHour;
           const navLevel = level(domain, "navigationBonus");
           const amount = navLevel > 0
-            ? dailyFirstOpenBonus(domain, tierBonus(economy, config.slotTier), day, false) * (domainBaseRate(domain, economy) / economy.baseRate) * 0.1 * (1 + 0.15 * navLevel) * events
+            ? dailyFirstOpenValue(domain, economy, tierBonus(economy, config.slotTier)) * 0.1 * (1 + 0.15 * navLevel) * events
             : 0;
           addEarnings(state, domain, amount, "navigation");
         }
@@ -245,7 +249,6 @@ export function simulateEconomy(economy, options = {}) {
 
         const payout = claimVault(domain, economy, config.slotTier, currentHour, day, config.includeDailyBonus);
         addEarnings(state, domain, payout.vault, "vaultClaimed");
-        addEarnings(state, domain, payout.windfall, "windfall");
         addEarnings(state, domain, payout.daily, "dailyBonus");
       }
 

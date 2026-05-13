@@ -184,7 +184,7 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
   - Infinite levels
   - Growth rate: `1.6x`
 - `Traffic Engine`
-  - Increases the domain's base income before active, background, windfall, navigation, and wake calculations
+  - Increases the domain's base income before active, background, navigation, and wake calculations
   - Infinite levels
   - Growth rate: `1.42x`
   - Effect scales domain base rate by `1.18x` per level
@@ -195,16 +195,18 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
   - Increases vault cap
   - Infinite levels
   - Growth rate: `1.55x`
+  - Effect scales vault cap by `1.18x` per level from a 6-hour base cap
 - `Vault Pump`
   - Increases the rate that vault value accumulates
   - Uses the internal upgrade id `storageDuration` for save compatibility
   - Infinite levels
   - Growth rate: `1.55x`
-  - Effect scales vault fill rate by `1.18x` per level
-- `Windfall Bonus`
-  - Adds a revisit burst based on time since last visit
+  - Effect scales vault fill rate by `1.15x` per level
+- `Daily Boot`
+  - Increases the value of each daily streak day for that domain
+  - Uses the internal upgrade id `dailyBoot`
   - Infinite levels
-  - Growth rate: `2.0x`
+  - Growth rate: `1.7x`
 
 #### Category C: Background Behavior
 
@@ -283,7 +285,6 @@ Where `state_bonus` is exactly one of:
 ```txt
 payout =
   min(vault_amount, computed_vault_cap)
-  + windfall_bonus(hours_since_visit, level)
   + daily_first_open_bonus(streak, slot_streak_bonus_tier)
 ```
 
@@ -300,7 +301,6 @@ payout =
 ```txt
 navigation_payout =
   daily_first_open_bonus(entry, slot)
-  x (domain_base_rate / BASE_RATE)
   x 0.10
   x (1 + 0.15 x navigation_bonus_level)
 ```
@@ -323,14 +323,14 @@ Each currently slotted domain has its own streak.
 - Moving a domain between two active slots preserves its streak
 - Daily First-Open should use a flat formula driven by selected upgrades and the slot streak multiplier rather than current live `$/sec`
 - For v1, Daily First-Open scales from:
-  - `Windfall Bonus`
+  - `Daily Boot`
   - slot `Daily Streak Bonus`
 
 ```txt
 daily_first_open_bonus =
-  20
-  x (1 + 0.20 x windfall_bonus_level)
-  x (1 + 0.08 x current_streak)
+  max(20, domain_base_rate x 60 x 30)
+  x (1 + 0.12 x daily_boot_level^0.85)
+  x (1 + min(current_streak, 14) x 0.04)
   x (1 + 0.15 x slot_streak_bonus_tier)
 ```
 
@@ -522,13 +522,13 @@ total_cost_to_buy_n_levels =
 Initial tuning targets:
 
 - Tab Multiplier: base `$25`, growth `1.6`
-- Focus Bonus: base `$40`, growth `1.7`
+- Focus Bonus: base `$30`, growth `1.55`
 - Navigation Bonus: base `$35`, growth `1.6`
 - Cold Storage: base `$60`, growth `1.55`
 - Vault Pump: base `$80`, growth `1.55`
 - Traffic Engine: base `$50`, growth `1.42`
-- Windfall Bonus: base `$250`, growth `2.0`
-- Background Hum: base `$50`, growth `1.6`
+- Daily Boot: base `$120`, growth `1.7`
+- Background Hum: base `$40`, growth `1.55`
 - Idle Depth: base `$90`, growth `1.8`
 - Wake Bonus: base `$150`, growth `2.0`
 
@@ -537,17 +537,16 @@ Initial tuning targets:
 ```txt
 domain_base_rate(level) = BASE_RATE x 1.18^traffic_engine_level
 tab_multiplier_bonus(level) = 1 + (0.15 x level)
-focus_bonus(level) = 1 + (0.20 x level)
+focus_bonus(level) = 1 + (0.30 x level)
 navigation_payout(level) =
   daily_first_open_bonus
-  x (domain_base_rate / BASE_RATE)
   x 0.10
   x (1 + 0.15 x navigation_bonus_level)
 
-vault_cap(level) = BASE_RATE x 60 x 60 x (1 + 0.75 x cold_storage_level)
-vault_rate(level) = BASE_RATE x 0.5 x 1.18^vault_pump_level
+vault_cap(level) = BASE_RATE x 60 x 60 x 3 x 1.18^cold_storage_level
+vault_rate(level) = BASE_RATE x 0.5 x 1.15^vault_pump_level
 
-background_hum_pct(level) = 0.05 x level
+background_hum_pct(level) = 0.06 x level
 idle_depth_factor(t, lvl) = 1 + 0.1 x lvl x min(t / 300, 5)
 background_income =
   domain_base_rate
@@ -557,12 +556,11 @@ background_income =
   x slot_tier_bonus
 
 daily_first_open_bonus =
-  20
-  x (1 + 0.20 x windfall_bonus_level)
-  x (1 + 0.08 x current_streak)
+  max(20, domain_base_rate x 60 x 30)
+  x (1 + 0.12 x daily_boot_level^0.85)
+  x (1 + min(current_streak, 14) x 0.04)
   x (1 + 0.15 x slot_streak_bonus_tier)
 
-windfall_bonus(hours, lvl) = domain_base_rate x hours x 0.1 x lvl
 wake_bonus(lvl) = domain_base_rate x 30 x lvl x slot_tier_bonus
 ```
 
@@ -585,7 +583,7 @@ Vault cap and fill speed are affected by separate upgrades:
 - `Cold Storage` increases total vault capacity
 - `Vault Pump` increases the per-second vault fill rate
 
-This keeps storage strategy split between a larger bucket and a faster pump.
+Cold Storage is tuned around players who collect roughly `2-3` times per day. At equal Cold Storage and Vault Pump levels, the cap holds about `6` hours of vault fill; collecting twice or three times per day generally wants Cold Storage a few levels ahead of Vault Pump.
 
 ### 8.6 Balance Targets
 

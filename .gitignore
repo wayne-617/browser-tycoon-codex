@@ -1,0 +1,2 @@
+sim/economy/output/*.json
+sim/economy/output-*/*.json

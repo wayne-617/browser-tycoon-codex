@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Tycoon Economy Simulator</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #080a10; color: #eef3ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px; }
+    main { max-width: 1040px; margin: 0 auto; }
+    h1, h2, h3 { letter-spacing: 0; }
+    h1 { margin-bottom: 8px; }
+    section { margin-top: 28px; }
+    button, input { font: inherit; }
+    .hidden { display: none !important; }
+    .panel { background: #121622; border: 1px solid #283047; border-radius: 8px; padding: 18px; }
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+    label { display: grid; gap: 7px; color: #aab3cf; font-size: 13px; }
+    input { width: 100%; border: 1px solid #34405e; border-radius: 6px; background: #0b0e17; color: #f6f9ff; padding: 9px 10px; }
+    input[type="checkbox"] { width: auto; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
+    .btn { border: 1px solid #49618d; border-radius: 6px; background: #1c2741; color: #eef3ff; padding: 10px 14px; cursor: pointer; }
+    .btn-primary { background: #1e88e5; border-color: #64b5f6; color: #fff; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    .metric { background: #151927; border: 1px solid #2d3449; border-radius: 8px; padding: 14px; }
+    .metric strong { display: block; color: #96a5c9; font-size: 12px; text-transform: uppercase; }
+    .metric span { display: block; margin-top: 8px; font-size: 22px; }
+    details { margin-top: 16px; }
+    summary { cursor: pointer; color: #dbe5ff; }
+    svg { width: 100%; height: auto; display: block; }
+    svg text { fill: #dbe5ff; stroke: none; paint-order: normal; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; background: #121622; border-radius: 8px; overflow: hidden; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid #283047; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: #aab3cf; font-size: 12px; text-transform: uppercase; }
+    td input { min-width: 84px; padding: 6px 8px; }
+    code { background: #151927; padding: 2px 5px; border-radius: 4px; }
+    .muted { color: #aab3cf; }
+    .check-row { display: flex; gap: 8px; align-items: center; color: #dbe5ff; }
+    .day-breakdown { margin-top: 12px; }
+    .day-control { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; margin-bottom: 10px; }
+    .day-control label { max-width: 220px; }
+  </style>
+</head>
+<body>
+<main>
+  <section id="setupView">
+    <h1>Browser Tycoon Economy Simulator</h1>
+    <p class="muted">Defaults are loaded from <code>C:\Users\wl617\Downloads\browser-tycoon-codex\v1\background.js</code>. This is a first-run simulation with no prestige upgrades applied.</p>
+    <form id="simForm" class="panel">
+      <h2>Simulation Setup</h2>
+      <div class="form-grid">
+        <label>Days to simulate
+          <input name="days" type="number" min="1" step="1" value="30">
+        </label>
+        <label>Total focused hours per day
+          <input name="focusHours" type="number" min="0" step="0.25" value="2">
+        </label>
+        <label>Background hours per other tab
+          <input name="backgroundHours" type="number" min="0" step="0.25" value="0.5">
+        </label>
+        <label>Vault checks per day
+          <input name="vaultClaimsPerDay" type="number" min="1" step="1" value="2">
+        </label>
+      </div>
+
+      <details>
+        <summary>Advanced economy math</summary>
+        <div class="form-grid" style="margin-top:14px;">
+          <label>Starting slots
+            <input name="startingSlots" type="number" min="1" step="1" value="3">
+          </label>
+          <label>Base rate
+            <input name="baseRate" type="number" min="0" step="0.01" value="0.1">
+          </label>
+          <label>Vault rate
+            <input name="vaultRate" type="number" min="0" step="0.01" value="0.005">
+          </label>
+          <label>Traffic multiplier
+            <input name="trafficEngineMultiplier" type="number" min="1" step="0.01" value="1.18">
+          </label>
+          <label>Prestige divisor
+            <input name="prestigeDivisor" type="number" min="1" step="1" value="1000000">
+          </label>
+          <label>Slot tier bonus tier
+            <input name="slotTier" type="number" min="0" step="1" value="0">
+          </label>
+        </div>
+        <div class="actions">
+          <label class="check-row"><input name="includeDailyBonus" type="checkbox" checked> Daily bonuses</label>
+          <label class="check-row"><input name="enableNavigationBonus" type="checkbox" checked> Navigation events</label>
+          <label class="check-row"><input name="enableWakeBonus" type="checkbox" checked> Wake events</label>
+        </div>
+        <div class="form-grid" style="margin-top:14px;">
+          <label>Navigation events per focused hour
+            <input name="navigationEventsPerFocusedHour" type="number" min="0" step="1" value="5">
+          </label>
+          <label>Wake events per domain per day
+            <input name="wakeEventsPerDomainPerDay" type="number" min="0" step="1" value="1">
+          </label>
+        </div>
+      </details>
+
+      <details>
+        <summary>Upgrade cost math</summary>
+        <p class="muted">Blank max level means uncapped. Effects stay aligned to the current app formulas.</p>
+        <table>
+          <thead><tr><th>Upgrade</th><th>Base Cost</th><th>Growth</th><th>Max Level</th></tr></thead>
+          <tbody>
+    <tr>
+      <td>Tab Multiplier</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="0" data-upgrade-field="baseCost" value="25"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="0" data-upgrade-field="growth" value="1.6"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="0" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Focus Bonus</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="1" data-upgrade-field="baseCost" value="30"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="1" data-upgrade-field="growth" value="1.55"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="1" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Navigation Bonus</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="2" data-upgrade-field="baseCost" value="35"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="2" data-upgrade-field="growth" value="1.6"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="2" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Cold Storage</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="3" data-upgrade-field="baseCost" value="60"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="3" data-upgrade-field="growth" value="1.55"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="3" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Vault Pump</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="4" data-upgrade-field="baseCost" value="80"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="4" data-upgrade-field="growth" value="1.55"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="4" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Traffic Engine</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="5" data-upgrade-field="baseCost" value="50"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="5" data-upgrade-field="growth" value="1.42"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="5" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Daily Boot</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="6" data-upgrade-field="baseCost" value="120"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="6" data-upgrade-field="growth" value="1.7"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="6" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Background Hum</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="7" data-upgrade-field="baseCost" value="40"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="7" data-upgrade-field="growth" value="1.55"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="7" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Idle Depth</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="8" data-upgrade-field="baseCost" value="90"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="8" data-upgrade-field="growth" value="1.8"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="8" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  
+    <tr>
+      <td>Wake Bonus</td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="9" data-upgrade-field="baseCost" value="150"></td>
+      <td><input type="number" step="0.01" min="1" data-upgrade-index="9" data-upgrade-field="growth" value="2"></td>
+      <td><input type="number" step="1" min="0" data-upgrade-index="9" data-upgrade-field="maxLevel" value="" placeholder="none"></td>
+    </tr>
+  </tbody>
+        </table>
+      </details>
+
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Simulate</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="resultsView" class="hidden">
+    <div class="actions">
+      <button id="newSimulation" class="btn" type="button">New Simulation</button>
+    </div>
+    <div id="results"></div>
+  </section>
+</main>
+
+<script id="initialData" type="application/json">{"config":{"days":30,"focusMinutesPerDay":120,"backgroundMinutesPerOtherSlotPerDay":30,"vaultClaimsPerDay":2,"startingSlots":3,"includeDailyBonus":true,"enableNavigationBonus":true,"navigationEventsPerFocusedHour":5,"enableWakeBonus":true,"wakeEventsPerDomainPerDay":1,"slotTier":0},"economy":{"source":"C:\\Users\\wl617\\Downloads\\browser-tycoon-codex\\v1\\background.js","baseRate":0.1,"vaultRate":0.005,"trafficEngineMultiplier":1.18,"prestigeDivisor":1000000,"upgradeDefs":[{"id":"tabMultiplier","name":"Tab Multiplier","category":"active","baseCost":25,"growth":1.6,"maxLevel":null},{"id":"focusBonus","name":"Focus Bonus","category":"active","baseCost":30,"growth":1.55,"maxLevel":null},{"id":"navigationBonus","name":"Navigation Bonus","category":"active","baseCost":35,"growth":1.6,"maxLevel":null},{"id":"coldStorage","name":"Cold Storage","category":"vault","baseCost":60,"growth":1.55,"maxLevel":null},{"id":"storageDuration","name":"Vault Pump","category":"vault","baseCost":80,"growth":1.55,"maxLevel":null},{"id":"trafficEngine","name":"Traffic Engine","category":"active","baseCost":50,"growth":1.42,"maxLevel":null},{"id":"dailyBoot","name":"Daily Boot","category":"vault","baseCost":120,"growth":1.7,"maxLevel":null},{"id":"backgroundHum","name":"Background Hum","category":"background","baseCost":40,"growth":1.55,"maxLevel":null},{"id":"idleDepth","name":"Idle Depth","category":"background","baseCost":90,"growth":1.8,"maxLevel":null},{"id":"wakeBonus","name":"Wake Bonus","category":"background","baseCost":150,"growth":2,"maxLevel":null}],"slotTiers":[{"tier":0,"cpCost":0,"bonus":1},{"tier":1,"cpCost":1,"bonus":1.1},{"tier":2,"cpCost":3,"bonus":1.25},{"tier":3,"cpCost":8,"bonus":1.5},{"tier":4,"cpCost":20,"bonus":2},{"tier":5,"cpCost":50,"bonus":3}]},"daily":[{"day":1,"balance":60.92750000000024,"totalLifetimeEarned":3586.9275,"totalSpent":3526,"slots":4,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":1209.888,"background":23.903100000000002,"vaultAccrued":1512,"vaultClaimed":1512,"dailyBonus":720,"navigation":121.13640000000001,"wake":0},"highestUpgradeLevels":{"tabMultiplier":3,"focusBonus":3,"navigationBonus":3,"coldStorage":1,"storageDuration":1,"trafficEngine":2,"dailyBoot":0,"backgroundHum":2,"idleDepth":0,"wakeBonus":0},"averageUpgradeLevels":{"tabMultiplier":3,"focusBonus":3,"navigationBonus":2.25,"coldStorage":1,"storageDuration":1,"trafficEngine":2,"dailyBoot":0,"backgroundHum":2,"idleDepth":0,"wakeBonus":0}},{"day":2,"balance":56.50034579199928,"totalLifetimeEarned":10396.500345791997,"totalSpent":10340,"slots":5,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":2761.96464,"background":158.914723392,"vaultAccrued":2235.6000000000004,"vaultClaimed":2235.6000000000004,"dailyBonus":1293.2611200000001,"navigation":359.8323624,"wake":0},"highestUpgradeLevels":{"tabMultiplier":4,"focusBonus":4,"navigationBonus":3,"coldStorage":2,"storageDuration":1,"trafficEngine":3,"dailyBoot":1,"backgroundHum":3,"idleDepth":1,"wakeBonus":0},"averageUpgradeLevels":{"tabMultiplier":4,"focusBonus":4,"navigationBonus":3,"coldStorage":2,"storageDuration":1,"trafficEngine":3,"dailyBoot":0.4,"backgroundHum":3,"idleDepth":1,"wakeBonus":0}},{"day":3,"balance":112.87304778728776,"totalLifetimeEarned":20393.873047787292,"totalSpent":20281,"slots":5,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":4538.869327872,"background":523.1321352437759,"vaultAccrued":2670.2999999999993,"vaultClaimed":2670.2999999999993,"dailyBonus":1661.854574592,"navigation":588.6758310875136,"wake":14.540833199999998},"highestUpgradeLevels":{"tabMultiplier":5,"focusBonus":5,"navigationBonus":4,"coldStorage":3,"storageDuration":3,"trafficEngine":5,"dailyBoot":2,"backgroundHum":4,"idleDepth":2,"wakeBonus":1},"averageUpgradeLevels":{"tabMultiplier":5,"focusBonus":5,"navigationBonus":4,"coldStorage":3,"storageDuration":3,"trafficEngine":5,"dailyBoot":1.8,"backgroundHum":4,"idleDepth":2,"wakeBonus":1}},{"day":4,"balance":68.24442671249744,"totalLifetimeEarned":37435.244426712496,"totalSpent":37367,"slots":5,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":8773.404580831562,"background":1169.0023386068192,"vaultAccrued":3285.0899999999997,"vaultClaimed":3285.0899999999997,"dailyBonus":2741.9975718378187,"navigation":1034.4720483253298,"wake":37.404839323679994},"highestUpgradeLevels":{"tabMultiplier":6,"focusBonus":6,"navigationBonus":5,"coldStorage":5,"storageDuration":4,"trafficEngine":6,"dailyBoot":3,"backgroundHum":6,"idleDepth":3,"wakeBonus":2},"averageUpgradeLevels":{"tabMultiplier":6,"focusBonus":6,"navigationBonus":5,"coldStorage":5,"storageDuration":4,"trafficEngine":6,"dailyBoot":3,"backgroundHum":5.8,"idleDepth":3,"wakeBonus":2}},{"day":5,"balance":394.7608563543072,"totalLifetimeEarned":61268.76085635431,"totalSpent":60874,"slots":5,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":12457.913303591762,"background":2085.8346957006306,"vaultAccrued":4061.1925124999984,"vaultClaimed":4061.1925124999984,"dailyBonus":3653.416000798378,"navigation":1486.8844962471503,"wake":88.27542080388478},"highestUpgradeLevels":{"tabMultiplier":7,"focusBonus":7,"navigationBonus":7,"coldStorage":6,"storageDuration":5,"trafficEngine":8,"dailyBoot":3,"backgroundHum":7,"idleDepth":4,"wakeBonus":2},"averageUpgradeLevels":{"tabMultiplier":7,"focusBonus":7,"navigationBonus":6.6,"coldStorage":6,"storageDuration":5,"trafficEngine":8,"dailyBoot":3,"backgroundHum":7,"idleDepth":4,"wakeBonus":2}},{"day":6,"balance":238.56059291485872,"totalLifetimeEarned":94383.56059291484,"totalSpent":94145,"slots":6,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":16627.48083940663,"background":3703.4877428713344,"vaultAccrued":4722.316874999999,"vaultClaimed":4722.316874999999,"dailyBonus":5897.922566022203,"navigation":2042.7272747211919,"wake":120.86443853919049},"highestUpgradeLevels":{"tabMultiplier":7,"focusBonus":8,"navigationBonus":7,"coldStorage":6,"storageDuration":5,"trafficEngine":8,"dailyBoot":4,"backgroundHum":7,"idleDepth":4,"wakeBonus":3},"averageUpgradeLevels":{"tabMultiplier":7,"focusBonus":7.166666666666667,"navigationBonus":7,"coldStorage":6,"storageDuration":5,"trafficEngine":8,"dailyBoot":4,"backgroundHum":7,"idleDepth":4,"wakeBonus":3}},{"day":7,"balance":52.038100187484815,"totalLifetimeEarned":135180.0381001874,"totalSpent":135128,"slots":6,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":20682.01014037108,"background":4950.947569064778,"vaultAccrued":5604.445667249998,"vaultClaimed":5604.445667249998,"dailyBonus":6770.780347702219,"navigation":2567.047330215356,"wake":221.24645266919248},"highestUpgradeLevels":{"tabMultiplier":8,"focusBonus":9,"navigationBonus":8,"coldStorage":7,"storageDuration":6,"trafficEngine":9,"dailyBoot":4,"backgroundHum":8,"idleDepth":5,"wakeBonus":3},"averageUpgradeLevels":{"tabMultiplier":8,"focusBonus":8.5,"navigationBonus":8,"coldStorage":7,"storageDuration":6,"trafficEngine":9,"dailyBoot":4,"backgroundHum":8,"idleDepth":5,"wakeBonus":3}},{"day":8,"balance":893.8465377377179,"totalLifetimeEarned":189629.84653773744,"totalSpent":188736,"slots":6,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":28437.158390792672,"background":7632.42920311577,"vaultAccrued":6445.112517337497,"vaultClaimed":6445.112517337497,"dailyBonus":8255.838170631572,"navigation":3421.792059148977,"wake":257.47809652373456},"highestUpgradeLevels":{"tabMultiplier":9,"focusBonus":9,"navigationBonus":9,"coldStorage":8,"storageDuration":7,"trafficEngine":10,"dailyBoot":5,"backgroundHum":9,"idleDepth":5,"wakeBonus":4},"averageUpgradeLevels":{"tabMultiplier":9,"focusBonus":9,"navigationBonus":8.166666666666666,"coldStorage":8,"storageDuration":7,"trafficEngine":10,"dailyBoot":5,"backgroundHum":9,"idleDepth":5,"wakeBonus":4}},{"day":9,"balance":1787.886435428547,"totalLifetimeEarned":260402.886435428,"totalSpent":258615,"slots":6,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":37282.28547708439,"background":11028.604816157713,"vaultAccrued":6894.771530174996,"vaultClaimed":6894.771530174996,"dailyBonus":10645.294855349142,"navigation":4511.331804662466,"wake":410.7514142621114},"highestUpgradeLevels":{"tabMultiplier":10,"focusBonus":10,"navigationBonus":9,"coldStorage":9,"storageDuration":8,"trafficEngine":11,"dailyBoot":6,"backgroundHum":9,"idleDepth":6,"wakeBonus":4},"averageUpgradeLevels":{"tabMultiplier":10,"focusBonus":10,"navigationBonus":9,"coldStorage":8.166666666666666,"storageDuration":8,"trafficEngine":11,"dailyBoot":6,"backgroundHum":9,"idleDepth":6,"wakeBonus":4}},{"day":10,"balance":311.45499013918743,"totalLifetimeEarned":352097.45499013877,"totalSpent":351786,"slots":6,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":48468.66688292915,"background":15174.250067706023,"vaultAccrued":7928.987259701247,"vaultClaimed":7928.987259701247,"dailyBonus":13649.576246847488,"navigation":5922.813095071458,"wake":550.2750024552735},"highestUpgradeLevels":{"tabMultiplier":10,"focusBonus":11,"navigationBonus":10,"coldStorage":9,"storageDuration":9,"trafficEngine":12,"dailyBoot":6,"backgroundHum":10,"idleDepth":6,"wakeBonus":5},"averageUpgradeLevels":{"tabMultiplier":10,"focusBonus":11,"navigationBonus":10,"coldStorage":9,"storageDuration":8.833333333333334,"trafficEngine":12,"dailyBoot":6,"backgroundHum":10,"idleDepth":6,"wakeBonus":5}},{"day":11,"balance":732.4626614478548,"totalLifetimeEarned":462043.4626614472,"totalSpent":461311,"slots":6,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":58098.145925894925,"background":18385.229769533104,"vaultAccrued":9019.223007910168,"vaultClaimed":9019.223007910168,"dailyBonus":16594.575727985488,"navigation":7192.949903725151,"wake":655.8833362598208},"highestUpgradeLevels":{"tabMultiplier":11,"focusBonus":11,"navigationBonus":10,"coldStorage":10,"storageDuration":9,"trafficEngine":13,"dailyBoot":7,"backgroundHum":11,"idleDepth":7,"wakeBonus":5},"averageUpgradeLevels":{"tabMultiplier":11,"focusBonus":11,"navigationBonus":10,"coldStorage":10,"storageDuration":9,"trafficEngine":12.833333333333334,"dailyBoot":7,"backgroundHum":11,"idleDepth":7,"wakeBonus":5}},{"day":12,"balance":1083.2115854866279,"totalLifetimeEarned":593193.2115854864,"totalSpent":592110,"slots":7,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":65293.50499120783,"background":25663.903012500377,"vaultAccrued":9552.788501156434,"vaultClaimed":9552.788501156434,"dailyBonus":21623.187256702255,"navigation":8245.184459361062,"wake":771.1807031108118},"highestUpgradeLevels":{"tabMultiplier":11,"focusBonus":11,"navigationBonus":10,"coldStorage":10,"storageDuration":9,"trafficEngine":13,"dailyBoot":7,"backgroundHum":11,"idleDepth":7,"wakeBonus":5},"averageUpgradeLevels":{"tabMultiplier":11,"focusBonus":11,"navigationBonus":10,"coldStorage":10,"storageDuration":9,"trafficEngine":12.714285714285714,"dailyBoot":7,"backgroundHum":10.857142857142858,"idleDepth":7,"wakeBonus":5}},{"day":13,"balance":490.020024992089,"totalLifetimeEarned":739103.0200249918,"totalSpent":738613,"slots":7,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":71476.25455415816,"background":30020.26527949036,"vaultAccrued":11093.97467419866,"vaultClaimed":11093.97467419866,"dailyBonus":23492.082560849423,"navigation":8943.975144645585,"wake":883.2562261632255},"highestUpgradeLevels":{"tabMultiplier":12,"focusBonus":12,"navigationBonus":11,"coldStorage":10,"storageDuration":10,"trafficEngine":14,"dailyBoot":7,"backgroundHum":11,"idleDepth":7,"wakeBonus":5},"averageUpgradeLevels":{"tabMultiplier":12,"focusBonus":12,"navigationBonus":11,"coldStorage":10,"storageDuration":10,"trafficEngine":13.714285714285714,"dailyBoot":7,"backgroundHum":11,"idleDepth":7,"wakeBonus":5}},{"day":14,"balance":4399.262602372284,"totalLifetimeEarned":922055.2626023716,"totalSpent":917656,"slots":7,"redeemablePrestige":0,"vaultStored":0,"income":{"focus":92050.84407578857,"background":37640.79080577353,"vaultAccrued":12233.766592780712,"vaultClaimed":12233.766592780712,"dailyBonus":28516.648965973,"navigation":11361.40372849418,"wake":1148.7884085702265},"highestUpgradeLevels":{"tabMultiplier":12,"focusBonus":12,"navigationBonus":11,"coldStorage":11,"storageDuration":10,"trafficEngine":14,"dailyBoot":8,"backgroundHum":12,"idleDepth":8,"wakeBonus":6},"averageUpgradeLevels":{"tabMultiplier":12,"focusBonus":12,"navigationBonus":11,"coldStorage":11,"storageDuration":10,"trafficEngine":14,"dailyBoot":8,"backgroundHum":12,"idleDepth":7.857142857142857,"wakeBonus":6}},{"day":15,"balance":2156.830306630218,"totalLifetimeEarned":1122196.8303066292,"totalSpent":1120040,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":97170.00826822977,"background":44615.1239681746,"vaultAccrued":12758.070875328456,"vaultClaimed":12758.070875328456,"dailyBonus":31847.42274402893,"navigation":12472.389108124722,"wake":1278.5527403714443},"highestUpgradeLevels":{"tabMultiplier":13,"focusBonus":13,"navigationBonus":12,"coldStorage":11,"storageDuration":11,"trafficEngine":15,"dailyBoot":8,"backgroundHum":12,"idleDepth":8,"wakeBonus":6},"averageUpgradeLevels":{"tabMultiplier":12.428571428571429,"focusBonus":13,"navigationBonus":12,"coldStorage":11,"storageDuration":11,"trafficEngine":15,"dailyBoot":8,"backgroundHum":12,"idleDepth":8,"wakeBonus":6}},{"day":16,"balance":4753.407705057063,"totalLifetimeEarned":1371149.4077050574,"totalSpent":1366396,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":122807.547818158,"background":57230.53765597166,"vaultAccrued":14068.831581697817,"vaultClaimed":14068.831581697817,"dailyBonus":38020.34898058641,"navigation":15316.619128374601,"wake":1508.6922336383052},"highestUpgradeLevels":{"tabMultiplier":13,"focusBonus":14,"navigationBonus":12,"coldStorage":12,"storageDuration":11,"trafficEngine":15,"dailyBoot":9,"backgroundHum":13,"idleDepth":8,"wakeBonus":6},"averageUpgradeLevels":{"tabMultiplier":13,"focusBonus":13.857142857142858,"navigationBonus":12,"coldStorage":12,"storageDuration":11,"trafficEngine":15,"dailyBoot":9,"backgroundHum":13,"idleDepth":8,"wakeBonus":6}},{"day":17,"balance":5678.876532731083,"totalLifetimeEarned":1653967.876532733,"totalSpent":1648289,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":143604.96262777428,"background":65794.15082519475,"vaultAccrued":14068.831581697817,"vaultClaimed":14068.831581697817,"dailyBonus":39979.01702041118,"navigation":17578.677501622533,"wake":1792.829270973519},"highestUpgradeLevels":{"tabMultiplier":13,"focusBonus":14,"navigationBonus":13,"coldStorage":12,"storageDuration":11,"trafficEngine":16,"dailyBoot":9,"backgroundHum":13,"idleDepth":9,"wakeBonus":7},"averageUpgradeLevels":{"tabMultiplier":13,"focusBonus":14,"navigationBonus":13,"coldStorage":12,"storageDuration":11,"trafficEngine":16,"dailyBoot":9,"backgroundHum":13,"idleDepth":9,"wakeBonus":7}},{"day":18,"balance":2018.4251270468812,"totalLifetimeEarned":1976501.4251270508,"totalSpent":1974483,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":160019.65728830872,"background":77666.68366243273,"vaultAccrued":15123.993950325152,"vaultClaimed":15123.993950325152,"dailyBonus":47536.73617668354,"navigation":20109.511208257005,"wake":2076.9663083087326},"highestUpgradeLevels":{"tabMultiplier":14,"focusBonus":14,"navigationBonus":13,"coldStorage":13,"storageDuration":12,"trafficEngine":17,"dailyBoot":9,"backgroundHum":14,"idleDepth":9,"wakeBonus":7},"averageUpgradeLevels":{"tabMultiplier":14,"focusBonus":14,"navigationBonus":13,"coldStorage":13,"storageDuration":12,"trafficEngine":16.142857142857142,"dailyBoot":9,"backgroundHum":14,"idleDepth":9,"wakeBonus":7}},{"day":19,"balance":2110.0606379442615,"totalLifetimeEarned":2347537.060637946,"totalSpent":2345427,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":186436.19816948916,"background":94531.16711554176,"vaultAccrued":16179.156318952488,"vaultClaimed":16179.156318952488,"dailyBonus":49167.08355430211,"navigation":22431.433224020104,"wake":2290.5971285919168},"highestUpgradeLevels":{"tabMultiplier":14,"focusBonus":15,"navigationBonus":13,"coldStorage":13,"storageDuration":13,"trafficEngine":17,"dailyBoot":10,"backgroundHum":14,"idleDepth":9,"wakeBonus":7},"averageUpgradeLevels":{"tabMultiplier":14,"focusBonus":15,"navigationBonus":13,"coldStorage":13,"storageDuration":12.857142857142858,"trafficEngine":17,"dailyBoot":10,"backgroundHum":14,"idleDepth":9,"wakeBonus":7}},{"day":20,"balance":4419.190051727142,"totalLifetimeEarned":2761761.190051727,"totalSpent":2757342,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":204668.4987274942,"background":103727.05836807447,"vaultAccrued":18432.68166337801,"vaultClaimed":18432.68166337801,"dailyBonus":59278.93907278839,"navigation":25666.13133824355,"wake":2450.820243804305},"highestUpgradeLevels":{"tabMultiplier":15,"focusBonus":15,"navigationBonus":14,"coldStorage":14,"storageDuration":13,"trafficEngine":17,"dailyBoot":10,"backgroundHum":14,"idleDepth":10,"wakeBonus":7},"averageUpgradeLevels":{"tabMultiplier":14.285714285714286,"focusBonus":15,"navigationBonus":14,"coldStorage":14,"storageDuration":13,"trafficEngine":17,"dailyBoot":10,"backgroundHum":14,"idleDepth":10,"wakeBonus":7}},{"day":21,"balance":5496.833619319019,"totalLifetimeEarned":3194296.833619317,"totalSpent":3188800,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":211034.91516256589,"background":114518.3271472313,"vaultAccrued":18606.029766795356,"vaultClaimed":18606.029766795356,"dailyBonus":59500.95757118834,"navigation":26399.585306171983,"wake":2475.8286136390425},"highestUpgradeLevels":{"tabMultiplier":15,"focusBonus":15,"navigationBonus":14,"coldStorage":14,"storageDuration":13,"trafficEngine":18,"dailyBoot":10,"backgroundHum":15,"idleDepth":10,"wakeBonus":8},"averageUpgradeLevels":{"tabMultiplier":15,"focusBonus":15,"navigationBonus":14,"coldStorage":14,"storageDuration":13,"trafficEngine":17.571428571428573,"dailyBoot":10,"backgroundHum":15,"idleDepth":10,"wakeBonus":8}},{"day":22,"balance":16873.304359935835,"totalLifetimeEarned":3702155.304359937,"totalSpent":3685282,"slots":7,"redeemablePrestige":1,"vaultStored":0,"income":{"focus":251823.7092679938,"background":137408.7636594099,"vaultAccrued":19204.080723585208,"vaultClaimed":19204.080723585208,"dailyBonus":65957.25550465907,"navigation":30267.59158529602,"wake":3197.069999672881},"highestUpgradeLevels":{"tabMultiplier":15,"focusBonus":16,"navigationBonus":14,"coldStorage":14,"storageDuration":14,"trafficEngine":18,"dailyBoot":11,"backgroundHum":15,"idleDepth":10,"wakeBonus":8},"averageUpgradeLevels":{"tabMultiplier":15,"focusBonus":16,"navigationBonus":14,"coldStorage":14,"storageDuration":14,"trafficEngine":18,"dailyBoot":10.714285714285714,"backgroundHum":15,"idleDepth":10,"wakeBonus":8}},{"day":23,"balance":4877.776266830682,"totalLifetimeEarned":4226986.776266836,"totalSpent":4222109,"slots":8,"redeemablePrestige":2,"vaultStored":0,"income":{"focus":251228.49250404787,"background":144663.82605000006,"vaultAccrued":21831.387384314654,"vaultClaimed":21831.387384314654,"dailyBonus":73463.66483877043,"navigation":30329.438550701205,"wake":3314.6625790606527},"highestUpgradeLevels":{"tabMultiplier":15,"focusBonus":16,"navigationBonus":14,"coldStorage":14,"storageDuration":14,"trafficEngine":18,"dailyBoot":11,"backgroundHum":15,"idleDepth":10,"wakeBonus":8},"averageUpgradeLevels":{"tabMultiplier":14.75,"focusBonus":15.75,"navigationBonus":13.875,"coldStorage":13.75,"storageDuration":13.625,"trafficEngine":17.75,"dailyBoot":10.5,"backgroundHum":14.75,"idleDepth":9.875,"wakeBonus":7.875}},{"day":24,"balance":15599.81339512387,"totalLifetimeEarned":4785771.813395114,"totalSpent":4770172,"slots":8,"redeemablePrestige":2,"vaultStored":0,"income":{"focus":260070.7908408806,"background":162774.74134049195,"vaultAccrued":23930.20321849412,"vaultClaimed":23930.20321849412,"dailyBonus":77676.6530093863,"navigation":30643.10881413368,"wake":3689.5399049066395},"highestUpgradeLevels":{"tabMultiplier":15,"focusBonus":16,"navigationBonus":15,"coldStorage":14,"storageDuration":14,"trafficEngine":18,"dailyBoot":11,"backgroundHum":15,"idleDepth":10,"wakeBonus":8},"averageUpgradeLevels":{"tabMultiplier":15,"focusBonus":16,"navigationBonus":15,"coldStorage":14,"storageDuration":14,"trafficEngine":18,"dailyBoot":11,"backgroundHum":15,"idleDepth":10,"wakeBonus":8}},{"day":25,"balance":21434.68638052902,"totalLifetimeEarned":5405668.686380511,"totalSpent":5384234,"slots":8,"redeemablePrestige":2,"vaultStored":0,"income":{"focus":291035.84426646685,"background":182759.84724815038,"vaultAccrued":24453.63912207389,"vaultClaimed":24453.63912207389,"dailyBonus":81368.76346595272,"navigation":36161.56092673707,"wake":4117.217956024289},"highestUpgradeLevels":{"tabMultiplier":15,"focusBonus":16,"navigationBonus":15,"coldStorage":15,"storageDuration":14,"trafficEngine":19,"dailyBoot":11,"backgroundHum":16,"idleDepth":10,"wakeBonus":8},"averageUpgradeLevels":{"tabMultiplier":15,"focusBonus":16,"navigationBonus":15,"coldStorage":15,"storageDuration":14,"trafficEngine":19,"dailyBoot":11,"backgroundHum":15.75,"idleDepth":10,"wakeBonus":8}},{"day":26,"balance":13826.301746408397,"totalLifetimeEarned":6109517.301746391,"totalSpent":6095691,"slots":8,"redeemablePrestige":2,"vaultStored":0,"income":{"focus":322337.08820874593,"background":216611.04429527762,"vaultAccrued":24453.63912207389,"vaultClaimed":24453.63912207389,"dailyBonus":96657.38263490664,"navigation":39332.289372665764,"wake":4457.171732209781},"highestUpgradeLevels":{"tabMultiplier":16,"focusBonus":17,"navigationBonus":15,"coldStorage":15,"storageDuration":14,"trafficEngine":19,"dailyBoot":11,"backgroundHum":16,"idleDepth":11,"wakeBonus":8},"averageUpgradeLevels":{"tabMultiplier":16,"focusBonus":16.625,"navigationBonus":15,"coldStorage":15,"storageDuration":14,"trafficEngine":19,"dailyBoot":11,"backgroundHum":16,"idleDepth":11,"wakeBonus":8}},{"day":27,"balance":15873.498859339627,"totalLifetimeEarned":6853474.498859325,"totalSpent":6837601,"slots":8,"redeemablePrestige":2,"vaultStored":0,"income":{"focus":343459.90362092137,"background":233311.21146898752,"vaultAccrued":26287.662056229434,"vaultClaimed":26287.662056229434,"dailyBonus":96978.50350744785,"navigation":39462.744727135636,"wake":4457.171732209781},"highestUpgradeLevels":{"tabMultiplier":16,"focusBonus":17,"navigationBonus":15,"coldStorage":15,"storageDuration":15,"trafficEngine":20,"dailyBoot":11,"backgroundHum":16,"idleDepth":11,"wakeBonus":9},"averageUpgradeLevels":{"tabMultiplier":16,"focusBonus":17,"navigationBonus":15,"coldStorage":15,"storageDuration":15,"trafficEngine":19.125,"dailyBoot":11,"backgroundHum":16,"idleDepth":11,"wakeBonus":9}},{"day":28,"balance":29601.10280562949,"totalLifetimeEarned":7669536.102805624,"totalSpent":7639935,"slots":8,"redeemablePrestige":2,"vaultStored":0,"income":{"focus":381755.50528421777,"background":256933.97163022234,"vaultAccrued":28121.68499038498,"vaultClaimed":28121.68499038498,"dailyBonus":99553.89290522844,"navigation":44174.531219878394,"wake":5522.0179163580215},"highestUpgradeLevels":{"tabMultiplier":16,"focusBonus":17,"navigationBonus":16,"coldStorage":15,"storageDuration":15,"trafficEngine":20,"dailyBoot":12,"backgroundHum":16,"idleDepth":11,"wakeBonus":9},"averageUpgradeLevels":{"tabMultiplier":16,"focusBonus":17,"navigationBonus":16,"coldStorage":15,"storageDuration":15,"trafficEngine":20,"dailyBoot":11.625,"backgroundHum":16,"idleDepth":11,"wakeBonus":9}},{"day":29,"balance":2965.482740251231,"totalLifetimeEarned":8557443.482740257,"totalSpent":8554478,"slots":8,"redeemablePrestige":2,"vaultStored":0,"income":{"focus":409054.70713768626,"background":276382.64839877,"vaultAccrued":28121.68499038498,"vaultClaimed":28121.68499038498,"dailyBonus":117912.21300067056,"navigation":50519.23093260166,"wake":5916.895474508482},"highestUpgradeLevels":{"tabMultiplier":17,"focusBonus":17,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"averageUpgradeLevels":{"tabMultiplier":16.25,"focusBonus":17,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9}},{"day":30,"balance":22161.270484405162,"totalLifetimeEarned":9488481.270484399,"totalSpent":9466320,"slots":8,"redeemablePrestige":3,"vaultStored":0,"income":{"focus":425585.0338695943,"background":300579.5728694796,"vaultAccrued":28121.68499038498,"vaultClaimed":28121.68499038498,"dailyBonus":119825.34432921957,"navigation":51009.256210967374,"wake":5916.895474508482},"highestUpgradeLevels":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":21,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"averageUpgradeLevels":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20.5,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9}}],"slotUnlocks":[{"slot":1,"day":1,"cost":0},{"slot":2,"day":1,"cost":0},{"slot":3,"day":1,"cost":0},{"slot":4,"day":1.5,"cost":500},{"slot":5,"day":2.5,"cost":2500},{"slot":6,"day":6.5,"cost":12500},{"slot":7,"day":12.5,"cost":62500},{"slot":8,"day":23.5,"cost":312500}],"final":{"day":30,"balance":22161.270484405162,"totalLifetimeEarned":9488481.270484399,"totalSpent":9466320,"slots":8,"redeemablePrestige":3,"vaultStored":0,"income":{"focus":425585.0338695943,"background":300579.5728694796,"vaultAccrued":28121.68499038498,"vaultClaimed":28121.68499038498,"dailyBonus":119825.34432921957,"navigation":51009.256210967374,"wake":5916.895474508482},"highestUpgradeLevels":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":21,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"averageUpgradeLevels":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20.5,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9}},"domains":[{"id":"domain-1","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":21,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":1311156.4387664574,"vaultAmount":0},{"id":"domain-2","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":21,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":1295625.8863281144,"vaultAmount":0},{"id":"domain-3","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":21,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":1292569.7383870527,"vaultAmount":0},{"id":"domain-4","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":21,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":1290324.0219462214,"vaultAmount":0},{"id":"domain-5","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":1279884.7115449505,"vaultAmount":0},{"id":"domain-6","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":1248507.4065963805,"vaultAmount":0},{"id":"domain-7","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":1155109.2204639276,"vaultAmount":0},{"id":"domain-8","upgrades":{"tabMultiplier":17,"focusBonus":18,"navigationBonus":16,"coldStorage":16,"storageDuration":15,"trafficEngine":20,"dailyBoot":12,"backgroundHum":17,"idleDepth":11,"wakeBonus":9},"lifetimeEarned":615303.8464513011,"vaultAmount":0}]}</script>
+<script>
+const COLORS = {"focus":"#27d3ff","background":"#8ce36b","vaultClaimed":"#ffc857","dailyBonus":"#ff7eb6","navigation":"#ff9f1c","wake":"#7bdff2"};
+const initialResult = JSON.parse(document.getElementById("initialData").textContent);
+const initialEconomy = structuredClone(initialResult.economy);
+
+function compact(value) {
+  if (!Number.isFinite(value)) return "0";
+  if (Math.abs(value) < 1000) return value.toFixed(2);
+  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi"];
+  let amount = value;
+  let index = 0;
+  while (Math.abs(amount) >= 1000 && index < suffixes.length - 1) {
+    amount /= 1000;
+    index += 1;
+  }
+  return amount.toFixed(2) + suffixes[index];
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+
+function slotUnlockCost(slotNumber) {
+  if (slotNumber <= 3) return 0;
+  return Math.round(500 * Math.pow(5, slotNumber - 4));
+}
+
+function prestigeTotalFromLifetime(lifetime, prestigeDivisor) {
+  if (!Number.isFinite(lifetime) || lifetime <= 0) return 0;
+  return Math.floor(Math.sqrt(lifetime / prestigeDivisor));
+}
+
+function upgradeCost(def, level) {
+  return Math.ceil(def.baseCost * Math.pow(def.growth, level));
+}
+
+function emptyUpgrades(upgradeDefs) {
+  return Object.fromEntries(upgradeDefs.map((upgrade) => [upgrade.id, 0]));
+}
+
+function createDomain(index, upgradeDefs) {
+  return { id: "domain-" + (index + 1), upgrades: emptyUpgrades(upgradeDefs), vaultAmount: 0, currentStreak: 0, lastVisitedHour: 0, dailyBonusClaimedDay: 0, lifetimeEarned: 0 };
+}
+
+function level(domain, id) {
+  return Number(domain.upgrades[id] || 0);
+}
+
+function tierBonus(economy, tier) {
+  return (economy.slotTiers.find((item) => item.tier === tier) || { bonus: 1 }).bonus;
+}
+
+function domainBaseRate(domain, economy) {
+  return economy.baseRate * Math.pow(economy.trafficEngineMultiplier, level(domain, "trafficEngine"));
+}
+
+function activeRate(domain, economy, slotTier) {
+  const tab = 1 + 0.15 * level(domain, "tabMultiplier");
+  const focus = 1 + 0.3 * level(domain, "focusBonus");
+  return domainBaseRate(domain, economy) * tab * focus * tierBonus(economy, slotTier);
+}
+
+function averageIdleDepthFactor(seconds) {
+  if (seconds <= 0) return 0;
+  if (seconds <= 1500) return seconds / 600;
+  return 5 - 3750 / seconds;
+}
+
+function backgroundEarnings(domain, economy, slotTier, seconds) {
+  const hum = 0.06 * level(domain, "backgroundHum");
+  if (hum <= 0 || seconds <= 0) return 0;
+  const idle = 1 + 0.1 * level(domain, "idleDepth") * averageIdleDepthFactor(seconds);
+  const tab = 1 + 0.15 * level(domain, "tabMultiplier");
+  return domainBaseRate(domain, economy) * tab * hum * idle * tierBonus(economy, slotTier) * seconds;
+}
+
+function vaultCap(domain, economy) {
+  return economy.baseRate * 60 * 60 * 3 * Math.pow(1.18, level(domain, "coldStorage"));
+}
+
+function vaultRate(domain, economy) {
+  return economy.vaultRate * Math.pow(1.15, level(domain, "storageDuration"));
+}
+
+function dailyFirstOpenValue(domain, economy, slotTierBonusValue) {
+  const dailyBoot = level(domain, "dailyBoot");
+  const baseDaily = Math.max(20, domainBaseRate(domain, economy) * 60 * 30);
+  const bootMultiplier = 1 + 0.12 * Math.pow(dailyBoot, 0.85);
+  const streakMultiplier = 1 + Math.min(domain.currentStreak, 14) * 0.04;
+  return baseDaily * bootMultiplier * streakMultiplier * slotTierBonusValue;
+}
+
+function dailyFirstOpenBonus(domain, economy, slotTierBonusValue, day, enabled) {
+  if (!enabled || domain.dailyBonusClaimedDay === day) return 0;
+  return dailyFirstOpenValue(domain, economy, slotTierBonusValue);
+}
+
+function claimVault(domain, economy, slotTier, currentHour, day, includeDailyBonus) {
+  const stored = Math.min(domain.vaultAmount, vaultCap(domain, economy));
+  const daily = dailyFirstOpenBonus(domain, economy, tierBonus(economy, slotTier), day, includeDailyBonus);
+  if (daily > 0) {
+    domain.currentStreak += 1;
+    domain.dailyBonusClaimedDay = day;
+  }
+  domain.lastVisitedHour = currentHour;
+  domain.vaultAmount = 0;
+  return { vault: stored, daily, total: stored + daily };
+}
+
+function addEarnings(state, domain, amount, bucket) {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  state.balance += amount;
+  state.totalLifetimeEarned += amount;
+  state.dailyBuckets[bucket] += amount;
+  domain.lifetimeEarned += amount;
+}
+
+function addVaultFill(state, domain, economy, elapsedSeconds) {
+  const gain = Math.min(Math.max(0, vaultCap(domain, economy) - domain.vaultAmount), vaultRate(domain, economy) * elapsedSeconds);
+  if (gain <= 0) return;
+  domain.vaultAmount += gain;
+  state.dailyBuckets.vaultAccrued += gain;
+}
+
+function spendAvailableMoney(state, economy, dayNumber) {
+  let boughtSomething = true;
+  while (boughtSomething) {
+    boughtSomething = false;
+    const nextSlot = state.domains.length + 1;
+    const nextSlotCost = slotUnlockCost(nextSlot);
+    if (state.balance >= nextSlotCost) {
+      state.balance -= nextSlotCost;
+      state.totalSpent += nextSlotCost;
+      state.domains.push(createDomain(state.domains.length, economy.upgradeDefs));
+      state.slotUnlocks.push({ slot: nextSlot, day: dayNumber, cost: nextSlotCost });
+      boughtSomething = true;
+      continue;
+    }
+    const candidates = [];
+    state.domains.forEach((domain, domainIndex) => {
+      economy.upgradeDefs.forEach((def, upgradeIndex) => {
+        const currentLevel = level(domain, def.id);
+        if (def.maxLevel !== null && currentLevel >= def.maxLevel) return;
+        candidates.push({ domain, domainIndex, def, upgradeIndex, level: currentLevel, cost: upgradeCost(def, currentLevel) });
+      });
+    });
+    if (!candidates.length) break;
+    const affordable = candidates
+      .filter((item) => item.cost <= state.balance)
+      .sort((a, b) => a.cost - b.cost || a.domainIndex - b.domainIndex || a.upgradeIndex - b.upgradeIndex);
+    if (!affordable.length) break;
+    const purchase = affordable[0];
+    state.balance -= purchase.cost;
+    state.totalSpent += purchase.cost;
+    purchase.domain.upgrades[purchase.def.id] += 1;
+    boughtSomething = true;
+  }
+}
+
+function highestUpgradeLevels(domains, upgradeDefs) {
+  return Object.fromEntries(upgradeDefs.map((def) => [def.id, Math.max(...domains.map((domain) => level(domain, def.id)))]));
+}
+
+function averageUpgradeLevels(domains, upgradeDefs) {
+  return Object.fromEntries(upgradeDefs.map((def) => [def.id, domains.reduce((sum, domain) => sum + level(domain, def.id), 0) / domains.length]));
+}
+
+function simulateEconomy(economy, config) {
+  const state = {
+    balance: 0,
+    totalLifetimeEarned: 0,
+    totalSpent: 0,
+    domains: Array.from({ length: config.startingSlots }, (_, index) => createDomain(index, economy.upgradeDefs)),
+    slotUnlocks: Array.from({ length: config.startingSlots }, (_, index) => ({ slot: index + 1, day: 1, cost: 0 })),
+    dailyBuckets: null
+  };
+  const daily = [];
+  const periodsPerDay = Math.max(1, Math.floor(config.vaultClaimsPerDay));
+  const periodSeconds = 86400 / periodsPerDay;
+  for (let day = 1; day <= config.days; day += 1) {
+    state.dailyBuckets = { focus: 0, background: 0, vaultAccrued: 0, vaultClaimed: 0, dailyBonus: 0, navigation: 0, wake: 0 };
+    for (let period = 1; period <= periodsPerDay; period += 1) {
+      const currentHour = (day - 1) * 24 + period * (24 / periodsPerDay);
+      const domainsAtPeriodStart = state.domains.length;
+      const focusSecondsPerDomain = (config.focusMinutesPerDay * 60 / domainsAtPeriodStart) / periodsPerDay;
+      const backgroundSecondsPerDomain = (config.backgroundMinutesPerOtherSlotPerDay * 60 * Math.max(0, domainsAtPeriodStart - 1) / domainsAtPeriodStart) / periodsPerDay;
+      for (const domain of state.domains) {
+        addVaultFill(state, domain, economy, periodSeconds);
+        addEarnings(state, domain, activeRate(domain, economy, config.slotTier) * focusSecondsPerDomain, "focus");
+        addEarnings(state, domain, backgroundEarnings(domain, economy, config.slotTier, backgroundSecondsPerDomain), "background");
+        if (config.enableNavigationBonus && config.navigationEventsPerFocusedHour > 0) {
+          const events = (focusSecondsPerDomain / 3600) * config.navigationEventsPerFocusedHour;
+          const navLevel = level(domain, "navigationBonus");
+          const amount = navLevel > 0 ? dailyFirstOpenValue(domain, economy, tierBonus(economy, config.slotTier)) * 0.1 * (1 + 0.15 * navLevel) * events : 0;
+          addEarnings(state, domain, amount, "navigation");
+        }
+        if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {
+          const events = config.wakeEventsPerDomainPerDay / periodsPerDay;
+          addEarnings(state, domain, domainBaseRate(domain, economy) * 30 * level(domain, "wakeBonus") * tierBonus(economy, config.slotTier) * events, "wake");
+        }
+        const payout = claimVault(domain, economy, config.slotTier, currentHour, day, config.includeDailyBonus);
+        addEarnings(state, domain, payout.vault, "vaultClaimed");
+        addEarnings(state, domain, payout.daily, "dailyBonus");
+      }
+      spendAvailableMoney(state, economy, day + period / periodsPerDay);
+    }
+    daily.push({
+      day,
+      balance: state.balance,
+      totalLifetimeEarned: state.totalLifetimeEarned,
+      totalSpent: state.totalSpent,
+      slots: state.domains.length,
+      redeemablePrestige: prestigeTotalFromLifetime(state.totalLifetimeEarned, economy.prestigeDivisor),
+      vaultStored: state.domains.reduce((sum, domain) => sum + domain.vaultAmount, 0),
+      income: { ...state.dailyBuckets },
+      highestUpgradeLevels: highestUpgradeLevels(state.domains, economy.upgradeDefs),
+      averageUpgradeLevels: averageUpgradeLevels(state.domains, economy.upgradeDefs)
+    });
+  }
+  return { config, economy, daily, slotUnlocks: state.slotUnlocks, final: daily[daily.length - 1], domains: state.domains.map((domain) => ({ id: domain.id, upgrades: { ...domain.upgrades }, lifetimeEarned: domain.lifetimeEarned, vaultAmount: domain.vaultAmount })) };
+}
+
+function lineChart(rows, series, width = 920, height = 280) {
+  const pad = 36;
+  const max = Math.max(1, ...rows.flatMap((row) => series.map((item) => item.value(row))));
+  const x = (index) => pad + (rows.length <= 1 ? 0 : index * (width - pad * 2) / (rows.length - 1));
+  const y = (value) => height - pad - (value / max) * (height - pad * 2);
+  const paths = series.map((item) => {
+    const points = rows.map((row, index) => (index === 0 ? "M" : "L") + x(index).toFixed(1) + "," + y(item.value(row)).toFixed(1)).join(" ");
+    return '<path d="' + points + '" fill="none" stroke="' + item.color + '" stroke-width="2.5" />';
+  }).join("");
+  const legend = series.map((item, index) => '<g transform="translate(' + (pad + index * 190) + ',18)"><rect width="10" height="10" fill="' + item.color + '"/><text x="16" y="10">' + escapeHtml(item.label) + '</text></g>').join("");
+  return '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img"><rect width="' + width + '" height="' + height + '" fill="#10131d" rx="8"/><line x1="' + pad + '" y1="' + (height - pad) + '" x2="' + (width - pad) + '" y2="' + (height - pad) + '" stroke="#343b52"/><line x1="' + pad + '" y1="' + pad + '" x2="' + pad + '" y2="' + (height - pad) + '" stroke="#343b52"/><text x="' + pad + '" y="' + (pad - 10) + '">' + compact(max) + '</text>' + paths + legend + '</svg>';
+}
+
+function stackedBars(rows, keys, width = 920, height = 300) {
+  const pad = 36;
+  const max = Math.max(1, ...rows.map((row) => keys.reduce((sum, key) => sum + row.income[key], 0)));
+  const barGap = 1;
+  const barWidth = Math.max(1, (width - pad * 2) / rows.length - barGap);
+  const chartHeight = height - pad * 2;
+  const bars = rows.map((row, index) => {
+    let yCursor = height - pad;
+    const x = pad + index * ((width - pad * 2) / rows.length);
+    return keys.map((key) => {
+      const h = row.income[key] / max * chartHeight;
+      yCursor -= h;
+      return '<rect x="' + x.toFixed(1) + '" y="' + yCursor.toFixed(1) + '" width="' + barWidth.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" fill="' + COLORS[key] + '"/>';
+    }).join("");
+  }).join("");
+  const legend = keys.map((key, index) => '<g transform="translate(' + (pad + index * 130) + ',18)"><rect width="10" height="10" fill="' + COLORS[key] + '"/><text x="16" y="10">' + escapeHtml(key) + '</text></g>').join("");
+  return '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img"><rect width="' + width + '" height="' + height + '" fill="#10131d" rx="8"/><line x1="' + pad + '" y1="' + (height - pad) + '" x2="' + (width - pad) + '" y2="' + (height - pad) + '" stroke="#343b52"/><line x1="' + pad + '" y1="' + pad + '" x2="' + pad + '" y2="' + (height - pad) + '" stroke="#343b52"/><text x="' + pad + '" y="' + (pad - 10) + '">' + compact(max) + '</text>' + bars + legend + '</svg>';
+}
+
+function tableHtml(headers, rows) {
+  return '<table><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' + rows.map((row) => '<tr>' + row.map((cell) => '<td>' + escapeHtml(cell) + '</td>').join("") + '</tr>').join("") + '</tbody></table>';
+}
+
+function incomeBreakdownTable(result, selectedDay) {
+  const day = Math.min(Math.max(1, selectedDay), result.daily.length);
+  const row = result.daily[day - 1];
+  const sources = [
+    ["Focus", row.income.focus],
+    ["Background", row.income.background],
+    ["Vault accrued", row.income.vaultAccrued],
+    ["Vault claimed", row.income.vaultClaimed],
+    ["Daily bonus", row.income.dailyBonus],
+    ["Navigation", row.income.navigation],
+    ["Wake", row.income.wake]
+  ];
+  const totalGenerated = sources.reduce((sum, [, value]) => sum + value, 0);
+  return '<div class="day-breakdown"><div class="day-control"><label>Income details for day <input id="incomeDayInput" type="number" min="1" max="' + result.daily.length + '" step="1" value="' + day + '"></label><span class="muted">Total shown: $' + compact(totalGenerated) + '</span></div>' +
+    tableHtml(["Income Source", "Generated That Day", "Share"], sources.map(([label, value]) => [label, "$" + compact(value), totalGenerated > 0 ? (value / totalGenerated * 100).toFixed(2) + "%" : "0.00%"])) + '</div>';
+}
+
+function renderResults(result) {
+  const daily = result.daily;
+  const final = result.final;
+  const slotRows = result.slotUnlocks.map((unlock) => [unlock.slot, unlock.day.toFixed(2), "$" + compact(unlock.cost)]);
+  const prestigeRows = [1, 3, 5, 8].map((target) => {
+    const hit = daily.find((row) => row.redeemablePrestige >= target);
+    return [target, hit ? hit.day : "not reached"];
+  });
+  const upgradeRows = Object.entries(final.highestUpgradeLevels).map(([id, value]) => [id, value.toFixed(0), final.averageUpgradeLevels[id].toFixed(2)]);
+  document.getElementById("results").innerHTML = '<h1>Simulation Results</h1><div class="summary">' +
+    '<div class="metric"><strong>Days</strong><span>' + result.config.days + '</span></div>' +
+    '<div class="metric"><strong>Final Balance</strong><span>$' + compact(final.balance) + '</span></div>' +
+    '<div class="metric"><strong>Lifetime Earned</strong><span>$' + compact(final.totalLifetimeEarned) + '</span></div>' +
+    '<div class="metric"><strong>Slots</strong><span>' + final.slots + '</span></div>' +
+    '<div class="metric"><strong>Redeemable CP</strong><span>' + final.redeemablePrestige + '</span></div></div>' +
+    '<section><h2>Balance And Lifetime Earnings</h2>' + lineChart(daily, [{ label: "Balance", color: "#27d3ff", value: (row) => row.balance }, { label: "Lifetime earned", color: "#ffc857", value: (row) => row.totalLifetimeEarned }]) + '</section>' +
+    '<section><h2>Daily Income Breakdown</h2>' + stackedBars(daily, ["focus", "background", "vaultClaimed", "dailyBonus", "navigation", "wake"]) + '<div id="incomeBreakdown">' + incomeBreakdownTable(result, 1) + '</div></section>' +
+    '<section><h2>Slots And Prestige</h2>' + lineChart(daily, [{ label: "Slots", color: "#8ce36b", value: (row) => row.slots }, { label: "Redeemable CP", color: "#c084fc", value: (row) => row.redeemablePrestige }]) + '</section>' +
+    '<section><h2>Slot Unlocks</h2>' + tableHtml(["Slot", "Day", "Cost"], slotRows) + '</section>' +
+    '<section><h2>Prestige Milestones</h2>' + tableHtml(["Redeemable CP", "First Day Reached"], prestigeRows) + '</section>' +
+    '<section><h2>Final Upgrade Levels</h2>' + tableHtml(["Upgrade", "Highest", "Average"], upgradeRows) + '</section>';
+  document.getElementById("incomeBreakdown").addEventListener("input", (event) => {
+    if (event.target.id !== "incomeDayInput") return;
+    const nextDay = Number(event.target.value || 1);
+    document.getElementById("incomeBreakdown").innerHTML = incomeBreakdownTable(result, nextDay);
+    const nextInput = document.getElementById("incomeDayInput");
+    nextInput.focus();
+    nextInput.select();
+  });
+}
+
+function readNumber(form, name, fallback) {
+  const value = Number(form.elements[name].value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function readConfig(form) {
+  const navigationEventsPerFocusedHour = Math.max(0, readNumber(form, "navigationEventsPerFocusedHour", 0));
+  const wakeEventsPerDomainPerDay = Math.max(0, readNumber(form, "wakeEventsPerDomainPerDay", 0));
+  return {
+    days: Math.max(1, Math.floor(readNumber(form, "days", 100))),
+    focusMinutesPerDay: Math.max(0, readNumber(form, "focusHours", 2) * 60),
+    backgroundMinutesPerOtherSlotPerDay: Math.max(0, readNumber(form, "backgroundHours", 0.25) * 60),
+    vaultClaimsPerDay: Math.max(1, Math.floor(readNumber(form, "vaultClaimsPerDay", 2))),
+    startingSlots: Math.max(1, Math.floor(readNumber(form, "startingSlots", 3))),
+    includeDailyBonus: form.elements.includeDailyBonus.checked,
+    enableNavigationBonus: form.elements.enableNavigationBonus.checked || navigationEventsPerFocusedHour > 0,
+    navigationEventsPerFocusedHour,
+    enableWakeBonus: form.elements.enableWakeBonus.checked || wakeEventsPerDomainPerDay > 0,
+    wakeEventsPerDomainPerDay,
+    slotTier: Math.max(0, Math.floor(readNumber(form, "slotTier", 0)))
+  };
+}
+
+function readEconomy(form) {
+  const economy = structuredClone(initialEconomy);
+  economy.baseRate = Math.max(0, readNumber(form, "baseRate", economy.baseRate));
+  economy.vaultRate = Math.max(0, readNumber(form, "vaultRate", economy.vaultRate));
+  economy.trafficEngineMultiplier = Math.max(1, readNumber(form, "trafficEngineMultiplier", economy.trafficEngineMultiplier));
+  economy.prestigeDivisor = Math.max(1, readNumber(form, "prestigeDivisor", economy.prestigeDivisor));
+  document.querySelectorAll("[data-upgrade-index]").forEach((input) => {
+    const def = economy.upgradeDefs[Number(input.dataset.upgradeIndex)];
+    const field = input.dataset.upgradeField;
+    if (field === "maxLevel") {
+      def.maxLevel = input.value === "" ? null : Math.max(0, Math.floor(Number(input.value)));
+    } else {
+      def[field] = Math.max(field === "growth" ? 1 : 0, Number(input.value));
+    }
+  });
+  return economy;
+}
+
+document.getElementById("simForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const result = simulateEconomy(readEconomy(form), readConfig(form));
+  renderResults(result);
+  document.getElementById("setupView").classList.add("hidden");
+  document.getElementById("resultsView").classList.remove("hidden");
+  window.scrollTo({ top: 0, behavior: "auto" });
+});
+
+document.getElementById("newSimulation").addEventListener("click", () => {
+  document.getElementById("resultsView").classList.add("hidden");
+  document.getElementById("setupView").classList.remove("hidden");
+  window.scrollTo({ top: 0, behavior: "auto" });
+});
+</script>
+</body>
+</html>

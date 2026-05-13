@@ -246,11 +246,11 @@ function upgradeCost(def, level) {
 
 function vaultCap(entry) {
   const cold = upgradeLevel(entry, "coldStorage");
-  return BASE_RATE * 60 * 60 * (1 + cold * 0.75);
+  return BASE_RATE * 60 * 60 * 3 * Math.pow(1.18, cold);
 }
 
 function vaultRate(entry) {
-  return BASE_RATE * 0.5 * Math.pow(1.18, upgradeLevel(entry, "storageDuration"));
+  return BASE_RATE * 0.5 * Math.pow(1.15, upgradeLevel(entry, "storageDuration"));
 }
 
 function tierBonus(slot) {
@@ -272,10 +272,10 @@ function incomeFor(domain) {
   if (!entry || !slot || !presence) return 0;
   const tab = 1 + 0.15 * upgradeLevel(entry, "tabMultiplier");
   if (presence.state === "active") {
-    return domainBaseRate(entry) * tab * (1 + 0.2 * upgradeLevel(entry, "focusBonus")) * tierBonus(slot);
+    return domainBaseRate(entry) * tab * (1 + 0.3 * upgradeLevel(entry, "focusBonus")) * tierBonus(slot);
   }
   if (presence.state === "background") {
-    const hum = 0.05 * upgradeLevel(entry, "backgroundHum");
+    const hum = 0.06 * upgradeLevel(entry, "backgroundHum");
     const idleSeconds = Math.max(0, (Date.now() - (presence.backgroundSince || Date.now())) / 1000);
     const idle = 1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5);
     return domainBaseRate(entry) * tab * hum * idle * tierBonus(slot);
@@ -518,12 +518,12 @@ function effectSummary(id, level) {
   const map = {
     trafficEngine: `Base income ${money(BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, level))}/sec -> ${money(BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, next))}/sec`,
     tabMultiplier: `Live income x${(1 + 0.15 * level).toFixed(2)} -> x${(1 + 0.15 * next).toFixed(2)}`,
-    focusBonus: `Focused income x${(1 + 0.2 * level).toFixed(2)} -> x${(1 + 0.2 * next).toFixed(2)}`,
+    focusBonus: `Focused income x${(1 + 0.3 * level).toFixed(2)} -> x${(1 + 0.3 * next).toFixed(2)}`,
     navigationBonus: `Navigation payout ${money(navigationPayoutForLevel(entry, slot, level))} -> ${money(navigationPayoutForLevel(entry, slot, next))}`,
     coldStorage: `Vault cap ${money(vaultCapForLevels(level))} -> ${money(vaultCapForLevels(next))}`,
     storageDuration: `Vault fill rate ${money(vaultRateForLevel(level))}/sec -> ${money(vaultRateForLevel(next))}/sec`,
-    windfallBonus: `Windfall per idle hour ${money(BASE_RATE * 0.1 * level)} -> ${money(BASE_RATE * 0.1 * next)}`,
-    backgroundHum: `Background income ${(5 * level).toFixed(0)}% -> ${(5 * next).toFixed(0)}% of live base`,
+    dailyBoot: `Daily bonus x${(1 + 0.12 * Math.pow(level, 0.85)).toFixed(2)} -> x${(1 + 0.12 * Math.pow(next, 0.85)).toFixed(2)}`,
+    backgroundHum: `Background income ${(6 * level).toFixed(0)}% -> ${(6 * next).toFixed(0)}% of live base`,
     idleDepth: `Max idle boost x${(1 + 0.5 * level).toFixed(2)} -> x${(1 + 0.5 * next).toFixed(2)}`,
     wakeBonus: `Wake burst ${money(BASE_RATE * 30 * level)} -> ${money(BASE_RATE * 30 * next)}`
   };
@@ -535,21 +535,24 @@ function currentDetailEntry() {
 }
 
 function vaultCapForLevels(cold) {
-  return BASE_RATE * 60 * 60 * (1 + cold * 0.75);
+  return BASE_RATE * 60 * 60 * 3 * Math.pow(1.18, cold);
 }
 
 function vaultRateForLevel(level) {
-  return BASE_RATE * 0.5 * Math.pow(1.18, level);
+  return BASE_RATE * 0.5 * Math.pow(1.15, level);
 }
 
 function navigationPayoutForLevel(entry, slot, level) {
   if (!entry || !slot || level <= 0) return 0;
-  return dailyFirstOpenBonusEstimate(entry, slot) * (domainBaseRate(entry) / BASE_RATE) * 0.1 * (1 + 0.15 * level);
+  return dailyFirstOpenBonusEstimate(entry, slot) * 0.1 * (1 + 0.15 * level);
 }
 
 function dailyFirstOpenBonusEstimate(entry, slot) {
-  const windfall = upgradeLevel(entry, "windfallBonus");
-  return 20 * (1 + windfall * 0.2) * (1 + entry.currentStreak * 0.08) * (1 + (slot.streakBonusTier || 0) * 0.15);
+  const dailyBoot = upgradeLevel(entry, "dailyBoot");
+  const baseDaily = Math.max(20, domainBaseRate(entry) * 60 * 30);
+  const bootMultiplier = 1 + 0.12 * Math.pow(dailyBoot, 0.85);
+  const streakMultiplier = 1 + Math.min(entry.currentStreak, 14) * 0.04;
+  return baseDaily * bootMultiplier * streakMultiplier * (1 + (slot.streakBonusTier || 0) * 0.15);
 }
 
 function renderLibrary(pickSlotId = null) {

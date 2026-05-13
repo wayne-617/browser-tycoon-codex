@@ -39,13 +39,14 @@ node sim/economy/run.mjs --vault-claims-per-day 4
 
 ## Defaults
 
-- `days`: `100`
+- `days`: `30`
 - `focus-minutes`: `120` total focused minutes per day, split evenly across unlocked domains
-- `background-minutes`: `15` minutes per other slot per day
+- `background-minutes`: `30` minutes per other slot per day
 - `vault-claims-per-day`: `2`
 - `starting-slots`: `3`
 - no prestige slot upgrades
-- no navigation or wake bonus events unless enabled
+- navigation events enabled at `5` per focused hour
+- wake events enabled at `1` per domain per day
 
 The simulator reads current app constants and upgrade definitions from `v1/background.js` by default.
 

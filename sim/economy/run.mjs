@@ -2,7 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readEconomyDefaults } from "./economy-reader.mjs";
-import { simulateEconomy } from "./simulator.mjs";
+import { DEFAULT_SIM_OPTIONS, simulateEconomy } from "./simulator.mjs";
 import { renderReport } from "./report-template.mjs";
 
 function parseArgs(argv) {
@@ -75,7 +75,6 @@ function dailyRows(result) {
     vaultAccrued: row.income.vaultAccrued,
     vaultClaimed: row.income.vaultClaimed,
     dailyBonus: row.income.dailyBonus,
-    windfall: row.income.windfall,
     navigation: row.income.navigation,
     wake: row.income.wake
   }));
@@ -118,18 +117,21 @@ async function main() {
   economy.trafficEngineMultiplier = numberArg(args, "traffic-multiplier", economy.trafficEngineMultiplier);
   economy.prestigeDivisor = numberArg(args, "prestige-divisor", economy.prestigeDivisor);
 
+  const navigationEventsPerFocusedHour = numberArg(args, "navigation-events-per-focused-hour", DEFAULT_SIM_OPTIONS.navigationEventsPerFocusedHour);
+  const wakeEventsPerDomainPerDay = numberArg(args, "wake-events-per-domain-day", DEFAULT_SIM_OPTIONS.wakeEventsPerDomainPerDay);
+
   const options = {
-    days: numberArg(args, "days", 100),
-    focusMinutesPerDay: numberArg(args, "focus-minutes", 120),
-    backgroundMinutesPerOtherSlotPerDay: numberArg(args, "background-minutes", 15),
-    vaultClaimsPerDay: numberArg(args, "vault-claims-per-day", 2),
-    startingSlots: numberArg(args, "starting-slots", 3),
+    days: numberArg(args, "days", DEFAULT_SIM_OPTIONS.days),
+    focusMinutesPerDay: numberArg(args, "focus-minutes", DEFAULT_SIM_OPTIONS.focusMinutesPerDay),
+    backgroundMinutesPerOtherSlotPerDay: numberArg(args, "background-minutes", DEFAULT_SIM_OPTIONS.backgroundMinutesPerOtherSlotPerDay),
+    vaultClaimsPerDay: numberArg(args, "vault-claims-per-day", DEFAULT_SIM_OPTIONS.vaultClaimsPerDay),
+    startingSlots: numberArg(args, "starting-slots", DEFAULT_SIM_OPTIONS.startingSlots),
     includeDailyBonus: !boolArg(args, "no-daily-bonus", false),
-    enableNavigationBonus: boolArg(args, "enable-navigation", false),
-    navigationEventsPerFocusedHour: numberArg(args, "navigation-events-per-focused-hour", 0),
-    enableWakeBonus: boolArg(args, "enable-wake", false),
-    wakeEventsPerDomainPerDay: numberArg(args, "wake-events-per-domain-day", 0),
-    slotTier: numberArg(args, "slot-tier", 0)
+    enableNavigationBonus: boolArg(args, "enable-navigation", DEFAULT_SIM_OPTIONS.enableNavigationBonus) || navigationEventsPerFocusedHour > 0,
+    navigationEventsPerFocusedHour,
+    enableWakeBonus: boolArg(args, "enable-wake", DEFAULT_SIM_OPTIONS.enableWakeBonus) || wakeEventsPerDomainPerDay > 0,
+    wakeEventsPerDomainPerDay,
+    slotTier: numberArg(args, "slot-tier", DEFAULT_SIM_OPTIONS.slotTier)
   };
 
   const result = simulateEconomy(economy, options);
@@ -148,4 +150,3 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-
