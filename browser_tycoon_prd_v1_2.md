@@ -192,7 +192,7 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
   - Increases vault cap
   - Infinite levels
   - Growth rate: `1.55x`
-  - Effect scales vault cap by `1.35x` per level from the base cap
+  - Effect scales vault cap by `1.32x` per level from the base cap
 - `Vault Pump`
   - Increases the rate that vault value accumulates
   - Uses the internal upgrade id `storageDuration` for save compatibility
@@ -659,7 +659,7 @@ Vault cap and fill speed are affected by separate upgrades:
 - `Cold Storage` increases total vault capacity
 - `Vault Pump` increases the per-second vault fill rate
 
-Cold Storage is tuned around players who collect roughly `3` times per day. Cold Storage scales slightly faster than Vault Pump (`1.35x` cap per level vs. `1.30x` fill rate per level), so capacity should keep pace with roughly 8-hour vault check intervals while staying a little ahead of vault income growth.
+Cold Storage is tuned around players who collect roughly `3` times per day. Cold Storage scales slightly faster than Vault Pump (`1.32x` cap per level vs. `1.30x` fill rate per level), so capacity should keep pace with roughly 8-hour vault check intervals while staying a little ahead of vault income growth.
 
 ### 8.6 Balance Change Workflow
 

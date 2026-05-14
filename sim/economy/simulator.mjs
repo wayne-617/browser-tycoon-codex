@@ -115,7 +115,7 @@ function vaultCap(domain, economy, cacheCoreLevel) {
   const cold = level(domain, "coldStorage");
   const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
   const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
-  return economy.baseRate * coreMultiplier * 60 * 25 * trafficScale * Math.pow(economy.coldStorageMultiplier || 1.35, cold);
+  return economy.baseRate * coreMultiplier * 60 * 25 * trafficScale * Math.pow(economy.coldStorageMultiplier || 1.32, cold);
 }
 
 function vaultRate(domain, economy, cacheCoreLevel) {

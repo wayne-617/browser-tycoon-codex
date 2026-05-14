@@ -7,7 +7,7 @@
   const CACHE_CORE_MULTIPLIER = 1.5;
   const CACHE_CORE_BASE_COST = 5;
   const CACHE_CORE_COST_GROWTH = 1.5;
-  const COLD_STORAGE_MULTIPLIER = 1.35;
+  const COLD_STORAGE_MULTIPLIER = 1.32;
   const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 
   const UPGRADE_DEFS = Object.freeze([

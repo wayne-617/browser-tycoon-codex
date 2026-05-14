@@ -179,7 +179,7 @@ async function main() {
   economy.cacheCoreMultiplierBase = numberArg(args, "cache-core-multiplier", economy.cacheCoreMultiplierBase || 1.5);
   economy.cacheCoreBaseCost = numberArg(args, "cache-core-base-cost", economy.cacheCoreBaseCost || 5);
   economy.cacheCoreCostGrowth = numberArg(args, "cache-core-cost-growth", economy.cacheCoreCostGrowth || 1.5);
-  economy.coldStorageMultiplier = numberArg(args, "cold-storage-multiplier", economy.coldStorageMultiplier || 1.35);
+  economy.coldStorageMultiplier = numberArg(args, "cold-storage-multiplier", economy.coldStorageMultiplier || 1.32);
 
   const navigationEventsPerFocusedHour = numberArg(args, "navigation-events-per-focused-hour", DEFAULT_SIM_OPTIONS.navigationEventsPerFocusedHour);
   const wakeEventsPerDomainPerDay = numberArg(args, "wake-events-per-domain-day", DEFAULT_SIM_OPTIONS.wakeEventsPerDomainPerDay);

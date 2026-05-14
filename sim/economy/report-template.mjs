@@ -141,7 +141,7 @@ export function renderReport(result) {
             <input name="vaultRate" type="number" min="0" step="any" value="${economy.vaultRate}">
           </label>
           <label>Cold Storage multiplier
-            <input name="coldStorageMultiplier" type="number" min="1" step="0.01" value="${economy.coldStorageMultiplier || 1.35}">
+            <input name="coldStorageMultiplier" type="number" min="1" step="0.01" value="${economy.coldStorageMultiplier || 1.32}">
           </label>
           <label>Traffic multiplier
             <input name="trafficEngineMultiplier" type="number" min="1" step="0.01" value="${economy.trafficEngineMultiplier}">
@@ -313,7 +313,7 @@ function backgroundEarnings(domain, economy, slotTier, seconds, cacheCoreLevel) 
 function vaultCap(domain, economy, cacheCoreLevel) {
   const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
   const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
-  return economy.baseRate * coreMultiplier * 60 * 25 * trafficScale * Math.pow(economy.coldStorageMultiplier || 1.35, level(domain, "coldStorage"));
+  return economy.baseRate * coreMultiplier * 60 * 25 * trafficScale * Math.pow(economy.coldStorageMultiplier || 1.32, level(domain, "coldStorage"));
 }
 
 function vaultRate(domain, economy, cacheCoreLevel) {
@@ -804,7 +804,7 @@ function readEconomy(form) {
   const economy = structuredClone(initialEconomy);
   economy.baseRate = Math.max(0, readNumber(form, "baseRate", economy.baseRate));
   economy.vaultRate = Math.max(0, readNumber(form, "vaultRate", economy.vaultRate));
-  economy.coldStorageMultiplier = Math.max(1, readNumber(form, "coldStorageMultiplier", economy.coldStorageMultiplier || 1.35));
+  economy.coldStorageMultiplier = Math.max(1, readNumber(form, "coldStorageMultiplier", economy.coldStorageMultiplier || 1.32));
   economy.trafficEngineMultiplier = Math.max(1, readNumber(form, "trafficEngineMultiplier", economy.trafficEngineMultiplier));
   economy.prestigeDivisor = Math.max(1, readNumber(form, "prestigeDivisor", economy.prestigeDivisor));
   economy.slotPrestigeCostScale = Math.max(1, readNumber(form, "slotPrestigeCostScale", economy.slotPrestigeCostScale || 1));

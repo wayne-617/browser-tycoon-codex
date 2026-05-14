@@ -36,7 +36,7 @@ node sim/economy/run.mjs --days 180
 node sim/economy/run.mjs --focus-minutes 60 --background-minutes 30
 node sim/economy/run.mjs --traffic-multiplier 1.2 --prestige-divisor 250000
 node sim/economy/run.mjs --cache-core-multiplier 1.5 --cache-core-base-cost 5 --cache-core-cost-growth 2
-node sim/economy/run.mjs --vault-claims-per-day 4 --cold-storage-multiplier 1.35
+node sim/economy/run.mjs --vault-claims-per-day 4 --cold-storage-multiplier 1.32
 node sim/economy/run.mjs --days 100 --prestige-mode --prestige-resets 2 --prestige-reset-days 30,60
 ```
 
