@@ -50,7 +50,7 @@ export async function readEconomyDefaults(backgroundPath = DEFAULT_BACKGROUND_PA
     slotPrestigeCostScale: numberConst(source, "SLOT_PRESTIGE_COST_SCALE", 1),
     cacheCoreMultiplierBase: numberConst(source, "CACHE_CORE_MULTIPLIER", 1.5),
     cacheCoreBaseCost: numberConst(source, "CACHE_CORE_BASE_COST", 5),
-    cacheCoreCostGrowth: numberConst(source, "CACHE_CORE_COST_GROWTH", 2),
+    cacheCoreCostGrowth: numberConst(source, "CACHE_CORE_COST_GROWTH", 1.5),
     coldStorageMultiplier: numberConst(source, "COLD_STORAGE_MULTIPLIER", 1.32),
     upgradeDefs: arrayConst(source, "UPGRADE_DEFS", []),
     slotTiers: arrayConst(source, "SLOT_TIERS", [{ tier: 0, cpCost: 0, bonus: 1 }])

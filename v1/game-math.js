@@ -1,12 +1,12 @@
 (function (global) {
   const BASE_RATE = 0.25;
   const VAULT_RATE = BASE_RATE * 0.02;
-  const TRAFFIC_ENGINE_MULTIPLIER = 1.2;
+  const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
   const PRESTIGE_DIVISOR = 100000;
   const SLOT_PRESTIGE_COST_SCALE = 1.5;
   const CACHE_CORE_MULTIPLIER = 1.5;
   const CACHE_CORE_BASE_COST = 5;
-  const CACHE_CORE_COST_GROWTH = 2;
+  const CACHE_CORE_COST_GROWTH = 1.5;
   const COLD_STORAGE_MULTIPLIER = 1.35;
   const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 

@@ -159,7 +159,7 @@ export function renderReport(result) {
             <input name="cacheCoreBaseCost" type="number" min="1" step="1" value="${economy.cacheCoreBaseCost || 5}">
           </label>
           <label>Cache Core cost growth
-            <input name="cacheCoreCostGrowth" type="number" min="1" step="0.01" value="${economy.cacheCoreCostGrowth || 2}">
+            <input name="cacheCoreCostGrowth" type="number" min="1" step="0.01" value="${economy.cacheCoreCostGrowth || 1.5}">
           </label>
           <label>Slot tier bonus tier
             <input name="slotTier" type="number" min="0" step="1" value="${initialConfig.slotTier}">
@@ -282,7 +282,7 @@ function cacheCoreMultiplier(economy, level) {
 }
 
 function cacheCoreCost(economy, level) {
-  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 2, Number(level || 0)));
+  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 1.5, Number(level || 0)));
 }
 
 function domainBaseRate(domain, economy, cacheCoreLevel = 0) {
@@ -810,7 +810,7 @@ function readEconomy(form) {
   economy.slotPrestigeCostScale = Math.max(1, readNumber(form, "slotPrestigeCostScale", economy.slotPrestigeCostScale || 1));
   economy.cacheCoreMultiplierBase = Math.max(1, readNumber(form, "cacheCoreMultiplierBase", economy.cacheCoreMultiplierBase || 1.5));
   economy.cacheCoreBaseCost = Math.max(1, readNumber(form, "cacheCoreBaseCost", economy.cacheCoreBaseCost || 5));
-  economy.cacheCoreCostGrowth = Math.max(1, readNumber(form, "cacheCoreCostGrowth", economy.cacheCoreCostGrowth || 2));
+  economy.cacheCoreCostGrowth = Math.max(1, readNumber(form, "cacheCoreCostGrowth", economy.cacheCoreCostGrowth || 1.5));
   document.querySelectorAll("[data-upgrade-index]").forEach((input) => {
     const def = economy.upgradeDefs[Number(input.dataset.upgradeIndex)];
     const field = input.dataset.upgradeField;

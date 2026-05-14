@@ -178,7 +178,7 @@ async function main() {
   economy.slotPrestigeCostScale = numberArg(args, "slot-prestige-cost-scale", economy.slotPrestigeCostScale || 1);
   economy.cacheCoreMultiplierBase = numberArg(args, "cache-core-multiplier", economy.cacheCoreMultiplierBase || 1.5);
   economy.cacheCoreBaseCost = numberArg(args, "cache-core-base-cost", economy.cacheCoreBaseCost || 5);
-  economy.cacheCoreCostGrowth = numberArg(args, "cache-core-cost-growth", economy.cacheCoreCostGrowth || 2);
+  economy.cacheCoreCostGrowth = numberArg(args, "cache-core-cost-growth", economy.cacheCoreCostGrowth || 1.5);
   economy.coldStorageMultiplier = numberArg(args, "cold-storage-multiplier", economy.coldStorageMultiplier || 1.35);
 
   const navigationEventsPerFocusedHour = numberArg(args, "navigation-events-per-focused-hour", DEFAULT_SIM_OPTIONS.navigationEventsPerFocusedHour);

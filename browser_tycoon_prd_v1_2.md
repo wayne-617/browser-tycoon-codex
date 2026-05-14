@@ -184,7 +184,7 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
   - Increases the domain's base income before active, background, navigation, and wake calculations
   - Infinite levels
   - Growth rate: `1.5x`
-  - Effect scales domain base rate by `1.2x` per level
+  - Effect scales domain base rate by `1.18x` per level
 
 #### Category B: Vault and Passive Storage
 
@@ -256,14 +256,14 @@ Buying Tier I or higher on slot 4+ permanently preserves that slot unlock throug
 
 ```txt
 cache_core_multiplier = 1.5^cache_core_level
-cache_core_cost(current_level) = ceil(5 x 2.0^current_level)
+cache_core_cost(current_level) = ceil(5 x 1.5^current_level)
 ```
 
 Cache Core applies before per-domain Traffic Engine scaling:
 
 ```txt
 domain_base_rate =
-  BASE_RATE x cache_core_multiplier x 1.2^traffic_engine_level
+  BASE_RATE x cache_core_multiplier x 1.18^traffic_engine_level
 ```
 
 ### 3.3 Future Global Upgrades
@@ -608,7 +608,7 @@ The implementation source of truth for these values is `UPGRADE_DEFS` in `v1/gam
 ### 8.3 Upgrade Effect Targets
 
 ```txt
-domain_base_rate(level) = BASE_RATE x 1.2^traffic_engine_level
+domain_base_rate(level) = BASE_RATE x cache_core_multiplier x 1.18^traffic_engine_level
 tab_multiplier_bonus(level) = 1 + (0.15 x level)
 focus_bonus(level) = 1 + (0.35 x level) + (0.01 x level^1.2)
 navigation_payout(level) =

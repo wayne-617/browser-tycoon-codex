@@ -1,19 +1,19 @@
 export const DEFAULT_SIM_OPTIONS = {
-  days: 14,
+  days: 21,
   focusMinutesPerDay: 120,
-  backgroundMinutesPerOtherSlotPerDay: 30,
-  vaultClaimsPerDay: 3,
+  backgroundMinutesPerOtherSlotPerDay: 60,
+  vaultClaimsPerDay: 4,
   startingSlots: 3,
   includeDailyBonus: true,
   enableNavigationBonus: true,
   navigationEventsPerFocusedHour: 5,
   enableWakeBonus: true,
-  wakeEventsPerDomainPerDay: 1,
+  wakeEventsPerDomainPerDay: 3,
   maxUpgradePurchasesPerPeriod: 2000,
   slotTier: 0,
   prestigeMode: true,
-  prestigeResets: 1,
-  prestigeResetDays: [6]
+  prestigeResets: 2,
+  prestigeResetDays: [6, 14]
 };
 
 function floorToSignificantFigures(value, figures = 2) {
