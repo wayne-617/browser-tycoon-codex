@@ -1,6 +1,6 @@
-const BASE_RATE = 0.1;
-const VAULT_RATE = BASE_RATE * 0.08;
-const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
+const BASE_RATE = 0.25;
+const VAULT_RATE = BASE_RATE * 0.02;
+const TRAFFIC_ENGINE_MULTIPLIER = 1.2;
 const PRESTIGE_DIVISOR = 1000000;
 const ALARM_NAME = "browser-tycoon-accrual";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
@@ -9,15 +9,15 @@ const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 
 const UPGRADE_DEFS = [
   { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 25, growth: 1.6, maxLevel: null },
-  { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 30, growth: 1.55, maxLevel: null },
+  { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 25, growth: 1.55, maxLevel: null },
   { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 35, growth: 1.6, maxLevel: null },
   { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 60, growth: 1.55, maxLevel: null },
-  { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 80, growth: 1.55, maxLevel: null },
-  { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 50, growth: 1.42, maxLevel: null },
-  { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 120, growth: 1.7, maxLevel: null },
+  { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 75, growth: 1.55, maxLevel: null },
+  { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 25, growth: 1.5, maxLevel: null },
+  { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 80, growth: 1.6, maxLevel: null },
   { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 40, growth: 1.55, maxLevel: null },
-  { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 90, growth: 1.8, maxLevel: null },
-  { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 150, growth: 2, maxLevel: null }
+  { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 90, growth: 1.75, maxLevel: null },
+  { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 110, growth: 1.6, maxLevel: null }
 ];
 
 const SLOT_TIERS = [
@@ -28,6 +28,7 @@ const SLOT_TIERS = [
   { tier: 4, cpCost: 20, bonus: 2 },
   { tier: 5, cpCost: 50, bonus: 3 }
 ];
+const SLOT_PRESTIGE_COST_SCALE = 1.5;
 
 const emptyUpgrades = () => Object.fromEntries(UPGRADE_DEFS.map((upgrade) => [upgrade.id, 0]));
 
@@ -272,6 +273,13 @@ function slotTierBonus(slot) {
   return SLOT_TIERS.find((tier) => tier.tier === slot.tier)?.bonus || 1;
 }
 
+function slotTierCost(slotId, tier) {
+  const baseCost = SLOT_TIERS.find((item) => item.tier === tier)?.cpCost;
+  if (!Number.isFinite(baseCost)) return Infinity;
+  const slotScale = Math.pow(SLOT_PRESTIGE_COST_SCALE, Math.max(0, Number(slotId) - 3));
+  return Math.ceil(baseCost * slotScale);
+}
+
 function slotUnlockCost(slotNumber) {
   if (slotNumber <= 3) return 0;
   if (slotNumber === 4) return 500;
@@ -280,12 +288,14 @@ function slotUnlockCost(slotNumber) {
 
 function vaultCap(entry) {
   const cold = getUpgradeLevel(entry, "coldStorage");
-  const baseCap = BASE_RATE * 60 * 45;
+  const trafficScale = Math.sqrt(domainBaseRate(entry) / BASE_RATE);
+  const baseCap = BASE_RATE * 60 * 25 * trafficScale;
   return baseCap * Math.pow(1.32, cold);
 }
 
 function vaultRate(entry) {
-  return VAULT_RATE * Math.pow(1.3, getUpgradeLevel(entry, "storageDuration"));
+  const trafficScale = Math.sqrt(domainBaseRate(entry) / BASE_RATE);
+  return VAULT_RATE * trafficScale * Math.pow(1.3, getUpgradeLevel(entry, "storageDuration"));
 }
 
 function domainBaseRate(entry) {
@@ -294,7 +304,8 @@ function domainBaseRate(entry) {
 
 function activeIncomePerSecond(entry, slot) {
   const tab = 1 + 0.15 * getUpgradeLevel(entry, "tabMultiplier");
-  const focus = 1 + 0.3 * getUpgradeLevel(entry, "focusBonus");
+  const focusLevel = getUpgradeLevel(entry, "focusBonus");
+  const focus = 1 + 0.35 * focusLevel + 0.01 * Math.pow(focusLevel, 1.2);
   return domainBaseRate(entry) * tab * focus * slotTierBonus(slot);
 }
 
@@ -318,10 +329,22 @@ function domainIncomeForState(entry, slot, presence, now) {
 function dailyFirstOpenBonus(entry, slot) {
   const dailyBoot = getUpgradeLevel(entry, "dailyBoot");
   const slotStreak = slot?.streakBonusTier || 0;
-  const baseDaily = Math.max(20, domainBaseRate(entry) * 60 * 30);
-  const bootMultiplier = 1 + 0.12 * Math.pow(dailyBoot, 0.85);
+  const baseDaily = Math.max(20, domainBaseRate(entry) * 60 * 35);
+  const bootMultiplier = 1 + 0.18 * Math.pow(dailyBoot, 0.95);
   const streakMultiplier = 1 + Math.min(entry.currentStreak, 14) * 0.04;
   return baseDaily * bootMultiplier * streakMultiplier * (1 + slotStreak * 0.15);
+}
+
+function entryVisitDate(entry) {
+  return entry?.lastVisited ? new Date(entry.lastVisited).toLocaleDateString("en-CA") : null;
+}
+
+function recordFocusedVisit(entry, now = Date.now()) {
+  const today = TODAY();
+  if (entryVisitDate(entry) === today) return;
+  const yesterday = new Date(now - 86400000).toLocaleDateString("en-CA");
+  entry.currentStreak = entryVisitDate(entry) === yesterday ? entry.currentStreak + 1 : 1;
+  entry.lastVisited = now;
 }
 
 function computeVaultPayout(entry, slot, now) {
@@ -391,8 +414,9 @@ async function rebuildPresence(sync, local) {
     else if (seen?.openCount > 0) state = "background";
     if (old?.state === "background" && state === "active" && slot) {
       const entry = getDomainEntry(local, domain);
-      addEarnings(sync, entry, domainBaseRate(entry) * 50 * getUpgradeLevel(entry, "wakeBonus") * slotTierBonus(slot));
+      addEarnings(sync, entry, domainBaseRate(entry) * 65 * Math.pow(getUpgradeLevel(entry, "wakeBonus"), 1.1) * slotTierBonus(slot));
     }
+    if (state === "active") recordFocusedVisit(getDomainEntry(local, domain), now);
     next[domain] = {
       state,
       openCount: seen?.openCount || 0,
@@ -433,24 +457,34 @@ function formatBadgeIncome(value) {
 }
 
 function currentIncomePerSecond(sync, library, presence) {
-  const now = Date.now();
-  return sync.slots.reduce((sum, slot) => {
-    if (!slot.assignedDomain) return sum;
-    return sum + domainIncomeForState(library[slot.assignedDomain], slot, presence[slot.assignedDomain], now);
-  }, 0);
+  const incomes = currentSlotIncomes(sync, library, presence);
+  return Object.values(incomes).reduce((sum, value) => sum + value, 0);
+}
+
+function currentSlotIncomes(sync, library, presence, now = Date.now()) {
+  return sync.slots.reduce((incomes, slot) => {
+    if (!slot.assignedDomain) return incomes;
+    const domain = slot.assignedDomain;
+    incomes[domain] = domainIncomeForState(library[domain], slot, presence[domain], now);
+    return incomes;
+  }, {});
 }
 
 async function getSnapshot() {
   const { sync, local } = await settleAndSave();
   const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const currentDomain = normalizeDomainFromUrl(activeTab?.url);
+  const now = Date.now();
+  const slotIncomes = currentSlotIncomes(sync, local.domainLibrary, local.presence, now);
   return {
     sync,
     local,
     upgradeDefs: UPGRADE_DEFS,
     slotTiers: SLOT_TIERS,
-    now: Date.now(),
-    incomePerSecond: currentIncomePerSecond(sync, local.domainLibrary, local.presence),
+    slotPrestigeCostScale: SLOT_PRESTIGE_COST_SCALE,
+    now,
+    slotIncomes,
+    incomePerSecond: Object.values(slotIncomes).reduce((sum, value) => sum + value, 0),
     nextSlotCost: slotUnlockCost(sync.unlockedSlots + 1),
     today: TODAY(),
     currentSite: {
@@ -480,10 +514,14 @@ function buyUpgrade(sync, local, domain, upgradeId, mode) {
 }
 
 async function addCurrentSite(slotId) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const domain = normalizeDomainFromUrl(tab?.url);
+  const domain = await activeTabDomain();
   if (!domain) return { ok: false, error: "This page cannot be added." };
   return assignDomainToSlot(slotId, domain, { fromCurrentSite: true });
+}
+
+async function activeTabDomain() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return normalizeDomainFromUrl(tab?.url);
 }
 
 async function assignDomainToSlot(slotId, domain, options = {}) {
@@ -513,7 +551,10 @@ async function assignDomainToSlot(slotId, domain, options = {}) {
   slot.assignedDomain = domain;
   entry.isSlotted = true;
   entry.slotId = slot.id;
-  if (options.fromCurrentSite) entry.lastVisited = Date.now();
+  if (options.fromCurrentSite) {
+    const activeDomain = normalizeDomainInput(options.currentDomain) || await activeTabDomain();
+    if (activeDomain === domain) recordFocusedVisit(entry);
+  }
   await rebuildPresence(sync, local);
   await saveState(sync, local);
   return { ok: true };
@@ -556,10 +597,7 @@ async function claimRevisit(domain) {
   const entry = getDomainEntry(local, domain);
   const payout = computeVaultPayout(entry, slot, Date.now());
   if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
-  const yesterday = new Date(Date.now() - 86400000).toLocaleDateString("en-CA");
-  entry.currentStreak = entry.dailyBonusClaimedDate === yesterday ? entry.currentStreak + 1 : 1;
   entry.dailyBonusClaimedDate = TODAY();
-  entry.lastVisited = Date.now();
   entry.vaultAmount = { ...SCI_ZERO };
   addEarnings(sync, entry, payout.total);
   await saveState(sync, local);
@@ -583,8 +621,9 @@ async function upgradeSlotTier(slotId) {
   const slot = sync.slots.find((item) => item.id === slotId);
   if (!slot || slot.tier >= 5) return { ok: false, error: "Slot tier is maxed." };
   const next = SLOT_TIERS.find((tier) => tier.tier === slot.tier + 1);
-  if (sync.cachePoints < next.cpCost) return { ok: false, error: "Not enough CP." };
-  sync.cachePoints -= next.cpCost;
+  const cost = slotTierCost(slot.id, next.tier);
+  if (sync.cachePoints < cost) return { ok: false, error: "Not enough CP." };
+  sync.cachePoints -= cost;
   slot.tier += 1;
   await saveState(sync, local);
   return { ok: true };
@@ -605,8 +644,10 @@ async function clearCachePrestige() {
     entry.dailyBonusClaimedDate = null;
     entry.currentStreak = 0;
   }
-  const persistentSlots = sync.slots.filter((slot) => slot.id <= 3 || slot.tier > 0).length;
-  sync.unlockedSlots = Math.max(3, persistentSlots);
+  const highestPersistentSlot = sync.slots.reduce((highest, slot) => {
+    return slot.id <= 3 || slot.tier > 0 ? Math.max(highest, slot.id) : highest;
+  }, 3);
+  sync.unlockedSlots = Math.max(3, highestPersistentSlot);
   sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
   await saveState(sync, local);
   return { ok: true, award };
@@ -647,7 +688,6 @@ async function navigationBonus(details) {
   const slot = sync.slots.find((item) => item.assignedDomain === domain);
   if (!slot) return;
   const entry = getDomainEntry(local, domain);
-  entry.lastVisited = Date.now();
   const level = getUpgradeLevel(entry, "navigationBonus");
   if (level <= 0) {
     await saveState(sync, local);
@@ -659,7 +699,7 @@ async function navigationBonus(details) {
     await saveState(sync, local);
     return;
   }
-  const amount = dailyFirstOpenBonus(entry, slot) * 0.1 * (1 + 0.15 * level);
+  const amount = dailyFirstOpenBonus(entry, slot) * 0.13 * (1 + 0.18 * level);
   local.lastNavigationBonusAt[domain] = now;
   addEarnings(sync, entry, amount);
   await saveState(sync, local);
@@ -686,7 +726,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       if (message.type === "snapshot") return getSnapshot();
       if (message.type === "addCurrentSite") return addCurrentSite(message.slotId);
-      if (message.type === "assignDomain") return assignDomainToSlot(message.slotId, message.domain);
+      if (message.type === "assignDomain") return assignDomainToSlot(message.slotId, message.domain, {
+        fromCurrentSite: Boolean(message.fromCurrentSite),
+        currentDomain: message.currentDomain
+      });
       if (message.type === "swapSlots") return swapSlots(message.fromSlotId, message.toSlotId);
       if (message.type === "removeDomain") return removeDomain(message.slotId);
       if (message.type === "buyUpgrade") {
