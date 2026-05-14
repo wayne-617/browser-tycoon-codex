@@ -34,17 +34,25 @@ function boolArg(args, name, fallback = false) {
   return !["false", "0", "no"].includes(String(args[name]).toLowerCase());
 }
 
+function dayListArg(args, name, fallback = []) {
+  if (!(name in args)) return fallback;
+  return String(args[name])
+    .split(/[,\s]+/)
+    .map((value) => Math.floor(Number(value)))
+    .filter((value) => Number.isFinite(value));
+}
+
 function compact(value) {
   if (!Number.isFinite(value)) return "0";
   if (Math.abs(value) < 1000) return value.toFixed(2);
-  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi"];
-  let amount = value;
-  let index = 0;
-  while (Math.abs(amount) >= 1000 && index < suffixes.length - 1) {
-    amount /= 1000;
-    index += 1;
+  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+  const exponent = Math.floor(Math.log10(Math.abs(value)));
+  const suffix = Math.floor(exponent / 3);
+  if (suffix > 0 && suffix < suffixes.length) {
+    const amount = value / Math.pow(10, suffix * 3);
+    return `${amount.toFixed(2)}${suffixes[suffix]}`;
   }
-  return `${amount.toFixed(2)}${suffixes[index]}`;
+  return `${value.toExponential(2)}`;
 }
 
 function csvEscape(value) {
@@ -64,11 +72,20 @@ function toCsv(rows) {
 function dailyRows(result) {
   return result.daily.map((row) => ({
     day: row.day,
+    run: row.run,
+    runDay: row.runDay,
     balance: row.balance,
     totalLifetimeEarned: row.totalLifetimeEarned,
     totalSpent: row.totalSpent,
     slots: row.slots,
     redeemablePrestige: row.redeemablePrestige,
+    lifetimePrestige: row.lifetimePrestige,
+    claimedPrestige: row.claimedPrestige,
+    cachePoints: row.cachePoints,
+    cacheCoreLevel: row.cacheCoreLevel,
+    cacheCoreMultiplier: row.cacheCoreMultiplier,
+    prestigeCount: row.prestigeCount,
+    prestigeAward: row.prestigeAward,
     vaultStored: row.vaultStored,
     focusIncome: row.income.focus,
     backgroundIncome: row.income.background,
@@ -80,6 +97,29 @@ function dailyRows(result) {
   }));
 }
 
+function noResetConfig(config) {
+  return {
+    ...config,
+    prestigeMode: false,
+    prestigeResets: 0,
+    prestigeResetDays: []
+  };
+}
+
+function attachNoResetComparison(result) {
+  if (!result.config?.prestigeMode || !result.prestigeEvents?.length) return result;
+  const baseline = simulateEconomy(result.economy, noResetConfig(result.config));
+  result.noResetComparison = {
+    noReset: {
+      config: baseline.config,
+      final: baseline.final,
+      daily: baseline.daily,
+      slotUnlocks: baseline.slotUnlocks
+    }
+  };
+  return result;
+}
+
 function printSummary(result, outputDir) {
   const final = result.final;
   console.log("\nBrowser Tycoon economy simulation");
@@ -89,11 +129,30 @@ function printSummary(result, outputDir) {
   console.log(`Lifetime earned: $${compact(final.totalLifetimeEarned)}`);
   console.log(`Unlocked slots: ${final.slots}`);
   console.log(`Redeemable CP: ${final.redeemablePrestige}`);
+  console.log(`Lifetime prestige: ${final.lifetimePrestige ?? final.redeemablePrestige}`);
+  console.log(`Claimed prestige: ${final.claimedPrestige || 0}`);
+  console.log(`Cache points: ${final.cachePoints || 0}`);
+  console.log(`Cache Core: level ${final.cacheCoreLevel || 0} (x${(final.cacheCoreMultiplier || 1).toFixed(2)})`);
+  console.log(`Prestige resets: ${final.prestigeCount || 0}`);
   console.log(`Report: ${path.join(outputDir, "latest.html")}`);
 
   console.log("\nSlot unlocks");
   for (const unlock of result.slotUnlocks) {
     console.log(`  Slot ${unlock.slot}: day ${unlock.day.toFixed(2)} ($${compact(unlock.cost)})`);
+  }
+
+  if (result.prestigeEvents?.length) {
+    console.log("\nPrestige resets");
+    for (const event of result.prestigeEvents) {
+      console.log(`  Day ${event.day}: +${event.award} CP, Cache Core L${event.cacheCoreLevel || 0}, slots ${event.slotsBefore}->${event.slotsAfter}, purchases ${event.purchases.length}`);
+    }
+  }
+
+  if (result.warnings?.length) {
+    console.log("\nSimulation warnings");
+    for (const warning of result.warnings.slice(0, 10)) {
+      console.log(`  Day ${Number(warning.day || 0).toFixed(2)}: ${warning.message}`);
+    }
   }
 
   console.log("\nPrestige milestones");
@@ -116,6 +175,11 @@ async function main() {
   economy.vaultRate = numberArg(args, "vault-rate", economy.vaultRate);
   economy.trafficEngineMultiplier = numberArg(args, "traffic-multiplier", economy.trafficEngineMultiplier);
   economy.prestigeDivisor = numberArg(args, "prestige-divisor", economy.prestigeDivisor);
+  economy.slotPrestigeCostScale = numberArg(args, "slot-prestige-cost-scale", economy.slotPrestigeCostScale || 1);
+  economy.cacheCoreMultiplierBase = numberArg(args, "cache-core-multiplier", economy.cacheCoreMultiplierBase || 1.5);
+  economy.cacheCoreBaseCost = numberArg(args, "cache-core-base-cost", economy.cacheCoreBaseCost || 5);
+  economy.cacheCoreCostGrowth = numberArg(args, "cache-core-cost-growth", economy.cacheCoreCostGrowth || 2);
+  economy.coldStorageMultiplier = numberArg(args, "cold-storage-multiplier", economy.coldStorageMultiplier || 1.35);
 
   const navigationEventsPerFocusedHour = numberArg(args, "navigation-events-per-focused-hour", DEFAULT_SIM_OPTIONS.navigationEventsPerFocusedHour);
   const wakeEventsPerDomainPerDay = numberArg(args, "wake-events-per-domain-day", DEFAULT_SIM_OPTIONS.wakeEventsPerDomainPerDay);
@@ -131,10 +195,13 @@ async function main() {
     navigationEventsPerFocusedHour,
     enableWakeBonus: boolArg(args, "enable-wake", DEFAULT_SIM_OPTIONS.enableWakeBonus) || wakeEventsPerDomainPerDay > 0,
     wakeEventsPerDomainPerDay,
-    slotTier: numberArg(args, "slot-tier", DEFAULT_SIM_OPTIONS.slotTier)
+    slotTier: numberArg(args, "slot-tier", DEFAULT_SIM_OPTIONS.slotTier),
+    prestigeMode: boolArg(args, "prestige-mode", DEFAULT_SIM_OPTIONS.prestigeMode),
+    prestigeResets: numberArg(args, "prestige-resets", DEFAULT_SIM_OPTIONS.prestigeResets),
+    prestigeResetDays: dayListArg(args, "prestige-reset-days", DEFAULT_SIM_OPTIONS.prestigeResetDays)
   };
 
-  const result = simulateEconomy(economy, options);
+  const result = attachNoResetComparison(simulateEconomy(economy, options));
   const outputDir = path.resolve(args["output-dir"] || path.join("sim", "economy", "output"));
   await mkdir(outputDir, { recursive: true });
 

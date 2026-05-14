@@ -20,14 +20,14 @@ function esc(value) {
 function compact(value) {
   if (!Number.isFinite(value)) return "0";
   if (Math.abs(value) < 1000) return value.toFixed(2);
-  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi"];
-  let amount = value;
-  let index = 0;
-  while (Math.abs(amount) >= 1000 && index < suffixes.length - 1) {
-    amount /= 1000;
-    index += 1;
+  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+  const exponent = Math.floor(Math.log10(Math.abs(value)));
+  const suffix = Math.floor(exponent / 3);
+  if (suffix > 0 && suffix < suffixes.length) {
+    const amount = value / Math.pow(10, suffix * 3);
+    return `${amount.toFixed(2)}${suffixes[suffix]}`;
   }
-  return `${amount.toFixed(2)}${suffixes[index]}`;
+  return `${value.toExponential(2)}`;
 }
 
 function table(headers, rows) {
@@ -99,7 +99,7 @@ export function renderReport(result) {
 <main>
   <section id="setupView">
     <h1>Browser Tycoon Economy Simulator</h1>
-    <p class="muted">Defaults are loaded from <code>${esc(economy.source || "configured economy")}</code>. This is a first-run simulation with no prestige upgrades applied.</p>
+    <p class="muted">Defaults are loaded from <code>${esc(economy.source || "configured economy")}</code>. Standard mode runs one continuous save; prestige mode applies scheduled cache clears, Cache Core spending, and slot tier spending.</p>
     <form id="simForm" class="panel">
       <h2>Simulation Setup</h2>
       <div class="form-grid">
@@ -116,6 +116,17 @@ export function renderReport(result) {
           <input name="vaultClaimsPerDay" type="number" min="1" step="1" value="${initialConfig.vaultClaimsPerDay}">
         </label>
       </div>
+      <div class="actions">
+        <label class="check-row"><input name="prestigeMode" type="checkbox" ${initialConfig.prestigeMode ? "checked" : ""}> Prestige reset mode</label>
+      </div>
+      <div class="form-grid" style="margin-top:14px;">
+        <label>Prestige resets
+          <input name="prestigeResets" type="number" min="0" step="1" value="${initialConfig.prestigeResets}">
+        </label>
+        <label>Reset days
+          <input name="prestigeResetDays" type="text" value="${esc((initialConfig.prestigeResetDays || []).join(","))}" placeholder="5, 15, 30">
+        </label>
+      </div>
 
       <details>
         <summary>Advanced economy math</summary>
@@ -129,11 +140,26 @@ export function renderReport(result) {
           <label>Vault rate
             <input name="vaultRate" type="number" min="0" step="any" value="${economy.vaultRate}">
           </label>
+          <label>Cold Storage multiplier
+            <input name="coldStorageMultiplier" type="number" min="1" step="0.01" value="${economy.coldStorageMultiplier || 1.35}">
+          </label>
           <label>Traffic multiplier
             <input name="trafficEngineMultiplier" type="number" min="1" step="0.01" value="${economy.trafficEngineMultiplier}">
           </label>
           <label>Prestige divisor
             <input name="prestigeDivisor" type="number" min="1" step="1" value="${economy.prestigeDivisor}">
+          </label>
+          <label>Slot prestige cost scale
+            <input name="slotPrestigeCostScale" type="number" min="1" step="0.01" value="${economy.slotPrestigeCostScale || 1}">
+          </label>
+          <label>Cache Core multiplier
+            <input name="cacheCoreMultiplierBase" type="number" min="1" step="0.01" value="${economy.cacheCoreMultiplierBase || 1.5}">
+          </label>
+          <label>Cache Core base cost
+            <input name="cacheCoreBaseCost" type="number" min="1" step="1" value="${economy.cacheCoreBaseCost || 5}">
+          </label>
+          <label>Cache Core cost growth
+            <input name="cacheCoreCostGrowth" type="number" min="1" step="0.01" value="${economy.cacheCoreCostGrowth || 2}">
           </label>
           <label>Slot tier bonus tier
             <input name="slotTier" type="number" min="0" step="1" value="${initialConfig.slotTier}">
@@ -172,7 +198,9 @@ export function renderReport(result) {
   <section id="resultsView" class="hidden">
     <div class="actions">
       <button id="newSimulation" class="btn" type="button">New Simulation</button>
+      <button id="downloadResults" class="btn btn-primary" type="button">Download Results</button>
     </div>
+    <div id="downloadStatus" class="muted"></div>
     <div id="results"></div>
   </section>
 </main>
@@ -182,18 +210,19 @@ export function renderReport(result) {
 const COLORS = ${JSON.stringify(COLORS)};
 const initialResult = JSON.parse(document.getElementById("initialData").textContent);
 const initialEconomy = structuredClone(initialResult.economy);
+let currentResult = initialResult;
 
 function compact(value) {
   if (!Number.isFinite(value)) return "0";
   if (Math.abs(value) < 1000) return value.toFixed(2);
-  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi"];
-  let amount = value;
-  let index = 0;
-  while (Math.abs(amount) >= 1000 && index < suffixes.length - 1) {
-    amount /= 1000;
-    index += 1;
+  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+  const exponent = Math.floor(Math.log10(Math.abs(value)));
+  const suffix = Math.floor(exponent / 3);
+  if (suffix > 0 && suffix < suffixes.length) {
+    const amount = value / Math.pow(10, suffix * 3);
+    return amount.toFixed(2) + suffixes[suffix];
   }
-  return amount.toFixed(2) + suffixes[index];
+  return value.toExponential(2);
 }
 
 function escapeHtml(value) {
@@ -229,6 +258,10 @@ function createDomain(index, upgradeDefs) {
   return { id: "domain-" + (index + 1), upgrades: emptyUpgrades(upgradeDefs), vaultAmount: 0, currentStreak: 0, lastVisitedHour: 0, dailyBonusClaimedDay: 0, lifetimeEarned: 0 };
 }
 
+function createSlot(id, tier = 0) {
+  return { id, tier, streakBonusTier: 0 };
+}
+
 function level(domain, id) {
   return Number(domain.upgrades[id] || 0);
 }
@@ -237,15 +270,30 @@ function tierBonus(economy, tier) {
   return (economy.slotTiers.find((item) => item.tier === tier) || { bonus: 1 }).bonus;
 }
 
-function domainBaseRate(domain, economy) {
-  return economy.baseRate * Math.pow(economy.trafficEngineMultiplier, level(domain, "trafficEngine"));
+function slotTierCost(economy, slotId, tier) {
+  const baseCost = (economy.slotTiers.find((item) => item.tier === tier) || {}).cpCost;
+  if (!Number.isFinite(baseCost)) return Infinity;
+  const slotScale = Math.pow(economy.slotPrestigeCostScale || 1, Math.max(0, Number(slotId) - 3));
+  return Math.ceil(baseCost * slotScale);
 }
 
-function activeRate(domain, economy, slotTier) {
+function cacheCoreMultiplier(economy, level) {
+  return Math.pow(economy.cacheCoreMultiplierBase || 1.5, Number(level || 0));
+}
+
+function cacheCoreCost(economy, level) {
+  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 2, Number(level || 0)));
+}
+
+function domainBaseRate(domain, economy, cacheCoreLevel = 0) {
+  return economy.baseRate * cacheCoreMultiplier(economy, cacheCoreLevel) * Math.pow(economy.trafficEngineMultiplier, level(domain, "trafficEngine"));
+}
+
+function activeRate(domain, economy, slotTier, cacheCoreLevel) {
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
   const focusLevel = level(domain, "focusBonus");
   const focus = 1 + 0.35 * focusLevel + 0.01 * Math.pow(focusLevel, 1.2);
-  return domainBaseRate(domain, economy) * tab * focus * tierBonus(economy, slotTier);
+  return domainBaseRate(domain, economy, cacheCoreLevel) * tab * focus * tierBonus(economy, slotTier);
 }
 
 function averageIdleDepthFactor(seconds) {
@@ -254,40 +302,42 @@ function averageIdleDepthFactor(seconds) {
   return 5 - 3750 / seconds;
 }
 
-function backgroundEarnings(domain, economy, slotTier, seconds) {
+function backgroundEarnings(domain, economy, slotTier, seconds, cacheCoreLevel) {
   const hum = 0.08 * level(domain, "backgroundHum");
   if (hum <= 0 || seconds <= 0) return 0;
   const idle = 1 + 0.1 * level(domain, "idleDepth") * averageIdleDepthFactor(seconds);
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
-  return domainBaseRate(domain, economy) * tab * hum * idle * tierBonus(economy, slotTier) * seconds;
+  return domainBaseRate(domain, economy, cacheCoreLevel) * tab * hum * idle * tierBonus(economy, slotTier) * seconds;
 }
 
-function vaultCap(domain, economy) {
-  const trafficScale = Math.sqrt(domainBaseRate(domain, economy) / economy.baseRate);
-  return economy.baseRate * 60 * 25 * trafficScale * Math.pow(1.32, level(domain, "coldStorage"));
+function vaultCap(domain, economy, cacheCoreLevel) {
+  const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
+  const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
+  return economy.baseRate * coreMultiplier * 60 * 25 * trafficScale * Math.pow(economy.coldStorageMultiplier || 1.35, level(domain, "coldStorage"));
 }
 
-function vaultRate(domain, economy) {
-  const trafficScale = Math.sqrt(domainBaseRate(domain, economy) / economy.baseRate);
-  return economy.vaultRate * trafficScale * Math.pow(1.3, level(domain, "storageDuration"));
+function vaultRate(domain, economy, cacheCoreLevel) {
+  const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
+  const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
+  return economy.vaultRate * coreMultiplier * trafficScale * Math.pow(1.3, level(domain, "storageDuration"));
 }
 
-function dailyFirstOpenValue(domain, economy, slotTierBonusValue) {
+function dailyFirstOpenValue(domain, economy, slotTierBonusValue, cacheCoreLevel) {
   const dailyBoot = level(domain, "dailyBoot");
-  const baseDaily = Math.max(20, domainBaseRate(domain, economy) * 60 * 35);
+  const baseDaily = Math.max(20, domainBaseRate(domain, economy, cacheCoreLevel) * 60 * 35);
   const bootMultiplier = 1 + 0.18 * Math.pow(dailyBoot, 0.95);
   const streakMultiplier = 1 + Math.min(domain.currentStreak, 14) * 0.04;
   return baseDaily * bootMultiplier * streakMultiplier * slotTierBonusValue;
 }
 
-function dailyFirstOpenBonus(domain, economy, slotTierBonusValue, day, enabled) {
+function dailyFirstOpenBonus(domain, economy, slotTierBonusValue, day, enabled, cacheCoreLevel) {
   if (!enabled || domain.dailyBonusClaimedDay === day) return 0;
-  return dailyFirstOpenValue(domain, economy, slotTierBonusValue);
+  return dailyFirstOpenValue(domain, economy, slotTierBonusValue, cacheCoreLevel);
 }
 
-function claimVault(domain, economy, slotTier, currentHour, day, includeDailyBonus) {
-  const stored = Math.min(domain.vaultAmount, vaultCap(domain, economy));
-  const daily = dailyFirstOpenBonus(domain, economy, tierBonus(economy, slotTier), day, includeDailyBonus);
+function claimVault(domain, economy, slotTier, currentHour, day, includeDailyBonus, cacheCoreLevel) {
+  const stored = Math.min(domain.vaultAmount, vaultCap(domain, economy, cacheCoreLevel));
+  const daily = dailyFirstOpenBonus(domain, economy, tierBonus(economy, slotTier), day, includeDailyBonus, cacheCoreLevel);
   if (daily > 0) {
     domain.currentStreak += 1;
     domain.dailyBonusClaimedDay = day;
@@ -306,7 +356,7 @@ function addEarnings(state, domain, amount, bucket) {
 }
 
 function addVaultFill(state, domain, economy, elapsedSeconds) {
-  const gain = Math.min(Math.max(0, vaultCap(domain, economy) - domain.vaultAmount), vaultRate(domain, economy) * elapsedSeconds);
+  const gain = Math.min(Math.max(0, vaultCap(domain, economy, state.cacheCoreLevel) - domain.vaultAmount), vaultRate(domain, economy, state.cacheCoreLevel) * elapsedSeconds);
   if (gain <= 0) return;
   domain.vaultAmount += gain;
   state.dailyBuckets.vaultAccrued += gain;
@@ -314,7 +364,16 @@ function addVaultFill(state, domain, economy, elapsedSeconds) {
 
 function spendAvailableMoney(state, economy, dayNumber) {
   let boughtSomething = true;
+  let purchasesThisPeriod = 0;
   while (boughtSomething) {
+    if (purchasesThisPeriod >= state.config.maxUpgradePurchasesPerPeriod) {
+      state.warnings.push({
+        day: dayNumber,
+        type: "purchase_cap",
+        message: "Stopped buying after " + state.config.maxUpgradePurchasesPerPeriod + " purchases in one period. Upgrade growth may be too low and causing runaway simulation time."
+      });
+      break;
+    }
     boughtSomething = false;
     const nextSlot = state.domains.length + 1;
     const nextSlotCost = slotUnlockCost(nextSlot);
@@ -322,7 +381,9 @@ function spendAvailableMoney(state, economy, dayNumber) {
       state.balance -= nextSlotCost;
       state.totalSpent += nextSlotCost;
       state.domains.push(createDomain(state.domains.length, economy.upgradeDefs));
+      state.slots.push(createSlot(nextSlot));
       state.slotUnlocks.push({ slot: nextSlot, day: dayNumber, cost: nextSlotCost });
+      purchasesThisPeriod += 1;
       boughtSomething = true;
       continue;
     }
@@ -343,8 +404,59 @@ function spendAvailableMoney(state, economy, dayNumber) {
     state.balance -= purchase.cost;
     state.totalSpent += purchase.cost;
     purchase.domain.upgrades[purchase.def.id] += 1;
+    purchasesThisPeriod += 1;
     boughtSomething = true;
   }
+}
+
+function spendPrestigeOnSlots(state, economy) {
+  const purchases = [];
+  for (const slot of state.slots) {
+    while (slot.tier < economy.slotTiers.length - 1) {
+      const nextTier = slot.tier + 1;
+      const cost = slotTierCost(economy, slot.id, nextTier);
+      if (state.cachePoints < cost) break;
+      state.cachePoints -= cost;
+      slot.tier = nextTier;
+      purchases.push({ slot: slot.id, tier: nextTier, cost });
+    }
+  }
+  return purchases;
+}
+
+function spendPrestigeOnCacheCore(state, economy) {
+  const purchases = [];
+  while (state.cachePoints >= cacheCoreCost(economy, state.cacheCoreLevel)) {
+    const cost = cacheCoreCost(economy, state.cacheCoreLevel);
+    state.cachePoints -= cost;
+    state.cacheCoreLevel += 1;
+    purchases.push({ level: state.cacheCoreLevel, cost, multiplier: cacheCoreMultiplier(economy, state.cacheCoreLevel) });
+  }
+  return purchases;
+}
+
+function resetForPrestige(state, economy, day) {
+  const totalPrestige = prestigeTotalFromLifetime(state.totalLifetimeEarned, economy.prestigeDivisor);
+  const award = Math.max(0, totalPrestige - state.cpAlreadyClaimedFromLifetime);
+  state.cachePoints += award;
+  state.cpAlreadyClaimedFromLifetime = totalPrestige;
+  const cacheCorePurchases = spendPrestigeOnCacheCore(state, economy);
+  const purchases = spendPrestigeOnSlots(state, economy);
+  const highestPersistentSlot = state.slots.reduce((highest, slot) => slot.id <= 3 || slot.tier > 0 ? Math.max(highest, slot.id) : highest, 3);
+  const previousSlots = state.slots.length;
+  state.balance = 0;
+  state.prestigeCount += 1;
+  state.currentRun += 1;
+  state.currentRunStartDay = day + 1;
+  state.slots = Array.from({ length: highestPersistentSlot }, (_, index) => {
+    const id = index + 1;
+    const existing = state.slots.find((slot) => slot.id === id);
+    return createSlot(id, existing?.tier || 0);
+  });
+  state.domains = state.slots.map((_, index) => createDomain(index, economy.upgradeDefs));
+  const event = { day, award, totalPrestige, cachePointsRemaining: state.cachePoints, cacheCoreLevel: state.cacheCoreLevel, cacheCorePurchases, slotsBefore: previousSlots, slotsAfter: state.slots.length, purchases };
+  state.prestigeEvents.push(event);
+  return event;
 }
 
 function highestUpgradeLevels(domains, upgradeDefs) {
@@ -355,16 +467,37 @@ function averageUpgradeLevels(domains, upgradeDefs) {
   return Object.fromEntries(upgradeDefs.map((def) => [def.id, domains.reduce((sum, domain) => sum + level(domain, def.id), 0) / domains.length]));
 }
 
+function normalizePrestigeResetDays(config) {
+  if (!config.prestigeMode) return new Set();
+  const validDays = [...new Set((config.prestigeResetDays || []).map((day) => Math.floor(Number(day))).filter((day) => day >= 1 && day <= config.days))].sort((a, b) => a - b);
+  const count = Math.max(0, Math.floor(Number(config.prestigeResets) || 0));
+  return new Set(validDays.slice(0, count));
+}
+
 function simulateEconomy(economy, config) {
   const state = {
+    config: {
+      ...config,
+      maxUpgradePurchasesPerPeriod: config.maxUpgradePurchasesPerPeriod || 2000
+    },
     balance: 0,
     totalLifetimeEarned: 0,
     totalSpent: 0,
+    cachePoints: 0,
+    cpAlreadyClaimedFromLifetime: 0,
+    cacheCoreLevel: 0,
+    prestigeCount: 0,
+    currentRun: 1,
+    currentRunStartDay: 1,
     domains: Array.from({ length: config.startingSlots }, (_, index) => createDomain(index, economy.upgradeDefs)),
+    slots: Array.from({ length: config.startingSlots }, (_, index) => createSlot(index + 1, config.slotTier)),
     slotUnlocks: Array.from({ length: config.startingSlots }, (_, index) => ({ slot: index + 1, day: 1, cost: 0 })),
+    prestigeEvents: [],
+    warnings: [],
     dailyBuckets: null
   };
   const daily = [];
+  const resetDays = normalizePrestigeResetDays(config);
   const periodsPerDay = Math.max(1, Math.floor(config.vaultClaimsPerDay));
   const periodSeconds = 86400 / periodsPerDay;
   for (let day = 1; day <= config.days; day += 1) {
@@ -374,49 +507,64 @@ function simulateEconomy(economy, config) {
       const domainsAtPeriodStart = state.domains.length;
       const focusSecondsPerDomain = (config.focusMinutesPerDay * 60 / domainsAtPeriodStart) / periodsPerDay;
       const backgroundSecondsPerDomain = (config.backgroundMinutesPerOtherSlotPerDay * 60 * Math.max(0, domainsAtPeriodStart - 1) / domainsAtPeriodStart) / periodsPerDay;
-      for (const domain of state.domains) {
+      state.domains.forEach((domain, domainIndex) => {
+        const slot = state.slots[domainIndex] || createSlot(domainIndex + 1);
         addVaultFill(state, domain, economy, periodSeconds);
-        addEarnings(state, domain, activeRate(domain, economy, config.slotTier) * focusSecondsPerDomain, "focus");
-        addEarnings(state, domain, backgroundEarnings(domain, economy, config.slotTier, backgroundSecondsPerDomain), "background");
+        addEarnings(state, domain, activeRate(domain, economy, slot.tier, state.cacheCoreLevel) * focusSecondsPerDomain, "focus");
+        addEarnings(state, domain, backgroundEarnings(domain, economy, slot.tier, backgroundSecondsPerDomain, state.cacheCoreLevel), "background");
         if (config.enableNavigationBonus && config.navigationEventsPerFocusedHour > 0) {
           const events = (focusSecondsPerDomain / 3600) * config.navigationEventsPerFocusedHour;
           const navLevel = level(domain, "navigationBonus");
-          const amount = navLevel > 0 ? dailyFirstOpenValue(domain, economy, tierBonus(economy, config.slotTier)) * 0.13 * (1 + 0.18 * navLevel) * events : 0;
+          const amount = navLevel > 0 ? dailyFirstOpenValue(domain, economy, tierBonus(economy, slot.tier), state.cacheCoreLevel) * 0.13 * (1 + 0.18 * navLevel) * events : 0;
           addEarnings(state, domain, amount, "navigation");
         }
         if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {
           const events = config.wakeEventsPerDomainPerDay / periodsPerDay;
-          addEarnings(state, domain, domainBaseRate(domain, economy) * 65 * Math.pow(level(domain, "wakeBonus"), 1.1) * tierBonus(economy, config.slotTier) * events, "wake");
+          addEarnings(state, domain, domainBaseRate(domain, economy, state.cacheCoreLevel) * 65 * Math.pow(level(domain, "wakeBonus"), 1.1) * tierBonus(economy, slot.tier) * events, "wake");
         }
-        const payout = claimVault(domain, economy, config.slotTier, currentHour, day, config.includeDailyBonus);
+        const payout = claimVault(domain, economy, slot.tier, currentHour, day, config.includeDailyBonus, state.cacheCoreLevel);
         addEarnings(state, domain, payout.vault, "vaultClaimed");
         addEarnings(state, domain, payout.daily, "dailyBonus");
-      }
+      });
       spendAvailableMoney(state, economy, day + period / periodsPerDay);
     }
+    const run = state.currentRun;
+    const runDay = day - state.currentRunStartDay + 1;
+    const prestigeEvent = resetDays.has(day) ? resetForPrestige(state, economy, day) : null;
+    const redeemablePrestige = prestigeTotalFromLifetime(state.totalLifetimeEarned, economy.prestigeDivisor);
     daily.push({
       day,
+      run,
+      runDay,
       balance: state.balance,
       totalLifetimeEarned: state.totalLifetimeEarned,
       totalSpent: state.totalSpent,
       slots: state.domains.length,
-      redeemablePrestige: prestigeTotalFromLifetime(state.totalLifetimeEarned, economy.prestigeDivisor),
+      redeemablePrestige,
+      lifetimePrestige: redeemablePrestige,
+      claimedPrestige: state.cpAlreadyClaimedFromLifetime,
+      cachePoints: state.cachePoints,
+      cacheCoreLevel: state.cacheCoreLevel,
+      cacheCoreMultiplier: cacheCoreMultiplier(economy, state.cacheCoreLevel),
+      prestigeCount: state.prestigeCount,
+      prestigeAward: prestigeEvent?.award || 0,
       vaultStored: state.domains.reduce((sum, domain) => sum + domain.vaultAmount, 0),
       income: { ...state.dailyBuckets },
       highestUpgradeLevels: highestUpgradeLevels(state.domains, economy.upgradeDefs),
-      averageUpgradeLevels: averageUpgradeLevels(state.domains, economy.upgradeDefs)
+      averageUpgradeLevels: averageUpgradeLevels(state.domains, economy.upgradeDefs),
+      slotTiers: state.slots.map((slot) => slot.tier)
     });
   }
-  return { config, economy, daily, slotUnlocks: state.slotUnlocks, final: daily[daily.length - 1], domains: state.domains.map((domain) => ({ id: domain.id, upgrades: { ...domain.upgrades }, lifetimeEarned: domain.lifetimeEarned, vaultAmount: domain.vaultAmount })) };
+  return { config: state.config, economy, daily, slotUnlocks: state.slotUnlocks, prestigeEvents: state.prestigeEvents, warnings: state.warnings, final: daily[daily.length - 1], slots: state.slots.map((slot) => ({ ...slot })), domains: state.domains.map((domain) => ({ id: domain.id, upgrades: { ...domain.upgrades }, lifetimeEarned: domain.lifetimeEarned, vaultAmount: domain.vaultAmount })) };
 }
 
 function lineChart(rows, series, width = 920, height = 280) {
   const pad = 36;
-  const max = Math.max(1, ...rows.flatMap((row) => series.map((item) => item.value(row))));
+  const max = Math.max(1, ...rows.flatMap((row, index) => series.map((item) => item.value(row, index))));
   const x = (index) => pad + (rows.length <= 1 ? 0 : index * (width - pad * 2) / (rows.length - 1));
   const y = (value) => height - pad - (value / max) * (height - pad * 2);
   const paths = series.map((item) => {
-    const points = rows.map((row, index) => (index === 0 ? "M" : "L") + x(index).toFixed(1) + "," + y(item.value(row)).toFixed(1)).join(" ");
+    const points = rows.map((row, index) => (index === 0 ? "M" : "L") + x(index).toFixed(1) + "," + y(item.value(row, index)).toFixed(1)).join(" ");
     return '<path d="' + points + '" fill="none" stroke="' + item.color + '" stroke-width="2.5" />';
   }).join("");
   const legend = series.map((item, index) => '<g transform="translate(' + (pad + index * 190) + ',18)"><rect width="10" height="10" fill="' + item.color + '"/><text x="16" y="10">' + escapeHtml(item.label) + '</text></g>').join("");
@@ -468,10 +616,104 @@ function incomeBreakdownTable(result, selectedDay) {
     tableHtml(["Income Source", "Generated That Day", "Share"], rows) + '</div>';
 }
 
+function realizedDailyIncome(row) {
+  return row.income.focus + row.income.background + row.income.vaultClaimed + row.income.dailyBonus + row.income.navigation + row.income.wake;
+}
+
+function runProgressionChart(result, width = 920, height = 320) {
+  const runs = new Map();
+  for (const row of result.daily) {
+    const run = row.run || 1;
+    if (!runs.has(run)) runs.set(run, []);
+    runs.get(run).push({ runDay: row.runDay || row.day, income: realizedDailyIncome(row) });
+  }
+  const runEntries = [...runs.entries()];
+  const pad = 40;
+  const maxDay = Math.max(1, ...runEntries.flatMap(([, rows]) => rows.map((row) => row.runDay)));
+  const maxIncome = Math.max(1, ...runEntries.flatMap(([, rows]) => rows.map((row) => row.income)));
+  const palette = ["#27d3ff", "#ffc857", "#8ce36b", "#ff7eb6", "#c084fc", "#ff9f1c", "#7bdff2"];
+  const x = (runDay) => pad + (maxDay <= 1 ? 0 : (runDay - 1) * (width - pad * 2) / (maxDay - 1));
+  const y = (value) => height - pad - (value / maxIncome) * (height - pad * 2);
+  const paths = runEntries.map(([run, rows], index) => {
+    const points = rows.map((row, pointIndex) => (pointIndex === 0 ? "M" : "L") + x(row.runDay).toFixed(1) + "," + y(row.income).toFixed(1)).join(" ");
+    return '<path d="' + points + '" fill="none" stroke="' + palette[index % palette.length] + '" stroke-width="2.5" />';
+  }).join("");
+  const legend = runEntries.map(([run], index) => '<g transform="translate(' + (pad + (index % 4) * 190) + ',' + (18 + Math.floor(index / 4) * 18) + ')"><rect width="10" height="10" fill="' + palette[index % palette.length] + '"/><text x="16" y="10">Run ' + run + '</text></g>').join("");
+  return '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img"><rect width="' + width + '" height="' + height + '" fill="#10131d" rx="8"/><line x1="' + pad + '" y1="' + (height - pad) + '" x2="' + (width - pad) + '" y2="' + (height - pad) + '" stroke="#343b52"/><line x1="' + pad + '" y1="' + pad + '" x2="' + pad + '" y2="' + (height - pad) + '" stroke="#343b52"/><text x="' + pad + '" y="' + (pad - 10) + '">$' + compact(maxIncome) + '/day</text><text x="' + (width - pad - 100) + '" y="' + (height - 12) + '">relative run day</text>' + paths + legend + '</svg>';
+}
+
+function noResetConfig(config) {
+  return {
+    ...config,
+    prestigeMode: false,
+    prestigeResets: 0,
+    prestigeResetDays: []
+  };
+}
+
+function noResetComparisonFor(result) {
+  if (!result.config?.prestigeMode || !(result.prestigeEvents || []).length) return null;
+  if (result.noResetComparison) return result.noResetComparison;
+  const baseline = simulateEconomy(structuredClone(result.economy), noResetConfig(result.config));
+  result.noResetComparison = {
+    noReset: {
+      config: baseline.config,
+      final: baseline.final,
+      daily: baseline.daily,
+      slotUnlocks: baseline.slotUnlocks
+    }
+  };
+  return result.noResetComparison;
+}
+
+function percentDelta(value, baseline) {
+  if (!Number.isFinite(value) || !Number.isFinite(baseline) || baseline === 0) return "-";
+  const delta = (value / baseline - 1) * 100;
+  return (delta >= 0 ? "+" : "") + delta.toFixed(1) + "%";
+}
+
+function resetComparisonSection(result) {
+  const comparison = noResetComparisonFor(result);
+  if (!comparison) return "";
+  const baseline = comparison.noReset;
+  const withReset = result.final;
+  const noReset = baseline.final;
+  const rows = [
+    ["Lifetime Earned", "$" + compact(withReset.totalLifetimeEarned), "$" + compact(noReset.totalLifetimeEarned), percentDelta(withReset.totalLifetimeEarned, noReset.totalLifetimeEarned)],
+    ["Unlocked Slots", withReset.slots, noReset.slots, percentDelta(withReset.slots, noReset.slots)],
+    ["Lifetime Prestige", withReset.lifetimePrestige ?? withReset.redeemablePrestige, noReset.lifetimePrestige ?? noReset.redeemablePrestige, percentDelta(withReset.lifetimePrestige ?? withReset.redeemablePrestige, noReset.lifetimePrestige ?? noReset.redeemablePrestige)],
+    ["Claimed Prestige", withReset.claimedPrestige || 0, noReset.claimedPrestige || 0, percentDelta(withReset.claimedPrestige || 0, noReset.claimedPrestige || 0)],
+    ["Cache Core", "L" + (withReset.cacheCoreLevel || 0) + " / x" + (withReset.cacheCoreMultiplier || 1).toFixed(2), "L" + (noReset.cacheCoreLevel || 0) + " / x" + (noReset.cacheCoreMultiplier || 1).toFixed(2), percentDelta(withReset.cacheCoreMultiplier || 1, noReset.cacheCoreMultiplier || 1)]
+  ];
+  return '<section><h2>Reset Vs No Reset</h2>' +
+    tableHtml(["Metric", "With Resets", "No Reset", "Delta"], rows) +
+    lineChart(result.daily, [
+      { label: "With resets lifetime", color: "#c084fc", value: (row) => row.totalLifetimeEarned },
+      { label: "No reset lifetime", color: "#ffc857", value: (_row, index) => baseline.daily[index]?.totalLifetimeEarned || 0 }
+    ]) +
+    '</section>';
+}
+
 function renderResults(result) {
+  currentResult = result;
   const daily = result.daily;
   const final = result.final;
+  const warningRows = (result.warnings || []).slice(0, 20).map((warning) => [
+    Number(warning.day || 0).toFixed(2),
+    warning.type || "warning",
+    warning.message || ""
+  ]);
   const slotRows = result.slotUnlocks.map((unlock) => [unlock.slot, unlock.day.toFixed(2), "$" + compact(unlock.cost)]);
+  const prestigeEventRows = (result.prestigeEvents || []).map((event) => [
+    event.day,
+    event.award,
+    event.totalPrestige,
+    event.cachePointsRemaining,
+    "L" + (event.cacheCoreLevel || 0),
+    event.cacheCorePurchases?.length ? event.cacheCorePurchases.map((item) => "L" + item.level).join(", ") : "none",
+    event.slotsBefore + " -> " + event.slotsAfter,
+    event.purchases.length ? event.purchases.map((item) => "S" + item.slot + " T" + item.tier).join(", ") : "none"
+  ]);
   const prestigeRows = [1, 3, 5, 8].map((target) => {
     const hit = daily.find((row) => row.redeemablePrestige >= target);
     return [target, hit ? hit.day : "not reached"];
@@ -482,11 +724,20 @@ function renderResults(result) {
     '<div class="metric"><strong>Final Balance</strong><span>$' + compact(final.balance) + '</span></div>' +
     '<div class="metric"><strong>Lifetime Earned</strong><span>$' + compact(final.totalLifetimeEarned) + '</span></div>' +
     '<div class="metric"><strong>Slots</strong><span>' + final.slots + '</span></div>' +
-    '<div class="metric"><strong>Redeemable CP</strong><span>' + final.redeemablePrestige + '</span></div></div>' +
+    '<div class="metric"><strong>Redeemable CP</strong><span>' + final.redeemablePrestige + '</span></div>' +
+    '<div class="metric"><strong>Lifetime Prestige</strong><span>' + (final.lifetimePrestige ?? final.redeemablePrestige) + '</span></div>' +
+    '<div class="metric"><strong>Claimed Prestige</strong><span>' + (final.claimedPrestige || 0) + '</span></div>' +
+    '<div class="metric"><strong>Cache Points</strong><span>' + (final.cachePoints || 0) + '</span></div>' +
+    '<div class="metric"><strong>Cache Core</strong><span>L' + (final.cacheCoreLevel || 0) + ' / x' + (final.cacheCoreMultiplier || 1).toFixed(2) + '</span></div>' +
+    '<div class="metric"><strong>Prestige Resets</strong><span>' + (final.prestigeCount || 0) + '</span></div></div>' +
     '<section><h2>Balance And Lifetime Earnings</h2>' + lineChart(daily, [{ label: "Balance", color: "#27d3ff", value: (row) => row.balance }, { label: "Lifetime earned", color: "#ffc857", value: (row) => row.totalLifetimeEarned }]) + '</section>' +
     '<section><h2>Daily Income Breakdown</h2>' + stackedBars(daily, ["focus", "background", "vaultClaimed", "dailyBonus", "navigation", "wake"]) + '<div id="incomeBreakdown">' + incomeBreakdownTable(result, 1) + '</div></section>' +
     '<section><h2>Slots And Prestige</h2>' + lineChart(daily, [{ label: "Slots", color: "#8ce36b", value: (row) => row.slots }, { label: "Redeemable CP", color: "#c084fc", value: (row) => row.redeemablePrestige }]) + '</section>' +
+    resetComparisonSection(result) +
+    ((result.prestigeEvents || []).length ? '<section><h2>Run Income Progression</h2>' + runProgressionChart(result) + '</section>' : '') +
+    (warningRows.length ? '<section><h2>Simulation Warnings</h2>' + tableHtml(["Day", "Type", "Message"], warningRows) + '</section>' : '') +
     '<section><h2>Slot Unlocks</h2>' + tableHtml(["Slot", "Day", "Cost"], slotRows) + '</section>' +
+    (prestigeEventRows.length ? '<section><h2>Prestige Resets</h2>' + tableHtml(["Day", "Award", "Total CP", "CP Left", "Cache Core", "Core Purchases", "Slots", "Tier Purchases"], prestigeEventRows) + '</section>' : '') +
     '<section><h2>Prestige Milestones</h2>' + tableHtml(["Redeemable CP", "First Day Reached"], prestigeRows) + '</section>' +
     '<section><h2>Final Upgrade Levels</h2>' + tableHtml(["Upgrade", "Highest", "Average"], upgradeRows) + '</section>';
   document.getElementById("incomeBreakdown").addEventListener("input", (event) => {
@@ -499,9 +750,33 @@ function renderResults(result) {
   });
 }
 
+function downloadSimulationResults() {
+  const payload = JSON.stringify(currentResult, null, 2);
+  const blob = new Blob([payload], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const mode = currentResult.config?.prestigeMode ? "prestige" : "standard";
+  const fileName = "browser-tycoon-sim-" + mode + "-" + new Date().toISOString().slice(0, 10) + ".json";
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  const status = document.getElementById("downloadStatus");
+  status.innerHTML = 'Download requested: <strong>' + escapeHtml(fileName) + '</strong>. If it did not appear, use this fallback: <a href="' + url + '" download="' + escapeHtml(fileName) + '">download JSON</a>.';
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 function readNumber(form, name, fallback) {
   const value = Number(form.elements[name].value);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function readDayList(form, name) {
+  return String(form.elements[name].value || "")
+    .split(/[,\s]+/)
+    .map((value) => Math.floor(Number(value)))
+    .filter((value) => Number.isFinite(value));
 }
 
 function readConfig(form) {
@@ -511,14 +786,17 @@ function readConfig(form) {
     days: Math.max(1, Math.floor(readNumber(form, "days", 100))),
     focusMinutesPerDay: Math.max(0, readNumber(form, "focusHours", 2) * 60),
     backgroundMinutesPerOtherSlotPerDay: Math.max(0, readNumber(form, "backgroundHours", 0.25) * 60),
-    vaultClaimsPerDay: Math.max(1, Math.floor(readNumber(form, "vaultClaimsPerDay", 2))),
+    vaultClaimsPerDay: Math.max(1, Math.floor(readNumber(form, "vaultClaimsPerDay", 3))),
     startingSlots: Math.max(1, Math.floor(readNumber(form, "startingSlots", 3))),
     includeDailyBonus: form.elements.includeDailyBonus.checked,
     enableNavigationBonus: form.elements.enableNavigationBonus.checked || navigationEventsPerFocusedHour > 0,
     navigationEventsPerFocusedHour,
     enableWakeBonus: form.elements.enableWakeBonus.checked || wakeEventsPerDomainPerDay > 0,
     wakeEventsPerDomainPerDay,
-    slotTier: Math.max(0, Math.floor(readNumber(form, "slotTier", 0)))
+    slotTier: Math.max(0, Math.floor(readNumber(form, "slotTier", 0))),
+    prestigeMode: form.elements.prestigeMode.checked,
+    prestigeResets: Math.max(0, Math.floor(readNumber(form, "prestigeResets", 0))),
+    prestigeResetDays: readDayList(form, "prestigeResetDays")
   };
 }
 
@@ -526,8 +804,13 @@ function readEconomy(form) {
   const economy = structuredClone(initialEconomy);
   economy.baseRate = Math.max(0, readNumber(form, "baseRate", economy.baseRate));
   economy.vaultRate = Math.max(0, readNumber(form, "vaultRate", economy.vaultRate));
+  economy.coldStorageMultiplier = Math.max(1, readNumber(form, "coldStorageMultiplier", economy.coldStorageMultiplier || 1.35));
   economy.trafficEngineMultiplier = Math.max(1, readNumber(form, "trafficEngineMultiplier", economy.trafficEngineMultiplier));
   economy.prestigeDivisor = Math.max(1, readNumber(form, "prestigeDivisor", economy.prestigeDivisor));
+  economy.slotPrestigeCostScale = Math.max(1, readNumber(form, "slotPrestigeCostScale", economy.slotPrestigeCostScale || 1));
+  economy.cacheCoreMultiplierBase = Math.max(1, readNumber(form, "cacheCoreMultiplierBase", economy.cacheCoreMultiplierBase || 1.5));
+  economy.cacheCoreBaseCost = Math.max(1, readNumber(form, "cacheCoreBaseCost", economy.cacheCoreBaseCost || 5));
+  economy.cacheCoreCostGrowth = Math.max(1, readNumber(form, "cacheCoreCostGrowth", economy.cacheCoreCostGrowth || 2));
   document.querySelectorAll("[data-upgrade-index]").forEach((input) => {
     const def = economy.upgradeDefs[Number(input.dataset.upgradeIndex)];
     const field = input.dataset.upgradeField;
@@ -555,6 +838,8 @@ document.getElementById("newSimulation").addEventListener("click", () => {
   document.getElementById("setupView").classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "auto" });
 });
+
+document.getElementById("downloadResults").addEventListener("click", downloadSimulationResults);
 </script>
 </body>
 </html>`;

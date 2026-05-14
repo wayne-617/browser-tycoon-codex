@@ -12,12 +12,39 @@ let tickerStarted = false;
 let lastRenderedRouteKey = "";
 let toastTimer = null;
 let modal = null;
+let collectBurst = null;
+let collectBurstTimer = null;
 
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
-const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
-const BASE_RATE = 0.25;
-var VAULT_RATE = BASE_RATE * 0.02;
-const TRAFFIC_ENGINE_MULTIPLIER = 1.2;
+const {
+  BASE_RATE,
+  TRAFFIC_ENGINE_MULTIPLIER,
+  toSci,
+  sciToNumber,
+  sciCompare,
+  sciAdd,
+  sciSub,
+  prestigeTotalFromLifetime,
+  cacheCoreMultiplier,
+  cacheCoreCost,
+  getUpgradeLevel: upgradeLevel,
+  upgradeCost,
+  slotTierBonus,
+  slotTierCost: mathSlotTierCost,
+  vaultCap: mathVaultCap,
+  vaultRate: mathVaultRate,
+  domainBaseRate: mathDomainBaseRate,
+  tabMultiplier,
+  focusMultiplier,
+  vaultPumpMultiplier,
+  dailyBootMultiplier,
+  activeIncomePerSecond: mathActiveIncomePerSecond,
+  backgroundIncomePerSecond: mathBackgroundIncomePerSecond,
+  dailyFirstOpenBonus: mathDailyFirstOpenBonus,
+  dailyFirstOpenBonusForStreak: mathDailyFirstOpenBonusForStreak,
+  navigationPayoutForLevel: mathNavigationPayoutForLevel,
+  wakeBurstForLevel: mathWakeBurstForLevel
+} = BrowserTycoonMath;
 
 function send(type, payload = {}) {
   return chrome.runtime.sendMessage({ type, ...payload });
@@ -25,6 +52,7 @@ function send(type, payload = {}) {
 
 async function refresh({ full = false } = {}) {
   snapshot = await send("snapshot");
+  syncWelcomeBackModal();
   resetLiveTickerBaseline();
   if (full || !lastRenderedRouteKey) {
     render();
@@ -34,9 +62,9 @@ async function refresh({ full = false } = {}) {
 }
 
 function resetLiveTickerBaseline() {
-  liveBaseBalance = toSci(snapshot?.sync?.balance || 0);
+  liveBaseBalance = visibleBalance(snapshot?.sync?.balance || 0);
   liveBaseAt = Date.now();
-  liveIncomePerSecond = Number(snapshot?.incomePerSecond || 0);
+  liveIncomePerSecond = pendingWelcomeBack() ? 0 : Number(snapshot?.incomePerSecond || 0);
 }
 
 function liveBalance() {
@@ -69,13 +97,31 @@ function setDisabled(selector, disabled) {
 function patchDynamicFields() {
   if (!snapshot) return;
   setText("balance", money(liveBalance()));
-  setText("income", `+${money(snapshot.incomePerSecond)}/sec`);
-  setText("cachePoints", `CP: ${Math.floor(snapshot.sync.cachePoints)}`);
+  setText("income", `+${money(liveIncomePerSecond)}/sec`);
+  setText("cachePoints", String(Math.floor(snapshot.sync.cachePoints)));
+  setText("cacheCoreLevel", String(cacheCoreLevel()));
   patchSlots();
   patchDetail();
   patchLibraryList();
   patchLibrarySummary();
   patchAffordability(liveBalance());
+}
+
+function pendingWelcomeBack() {
+  return snapshot?.welcomeBack && sciCompare(snapshot.welcomeBack.total, 0) > 0 ? snapshot.welcomeBack : null;
+}
+
+function visibleBalance(balance = snapshot?.sync?.balance || 0) {
+  const welcomeBack = pendingWelcomeBack();
+  return welcomeBack ? sciSub(balance, welcomeBack.total) : toSci(balance);
+}
+
+function syncWelcomeBackModal() {
+  if (snapshot?.welcomeBack && sciCompare(snapshot.welcomeBack.total, 0) > 0) {
+    modal = { name: "welcomeBack" };
+  } else if (modal?.name === "welcomeBack") {
+    modal = null;
+  }
 }
 
 function patchLibraryList() {
@@ -150,6 +196,9 @@ function patchAffordability(displayBalance = snapshot?.sync?.balance || 0) {
     const nextTier = slot ? nextSlotTier(slot) : null;
     button.disabled = !nextTier || snapshot.sync.cachePoints < slotTierCost(slot, nextTier);
   });
+  app.querySelectorAll("[data-action='upgradeCacheCore']").forEach((button) => {
+    button.disabled = snapshot.sync.cachePoints < cacheCoreCost(cacheCoreLevel());
+  });
   app.querySelectorAll("[data-action='buy'][data-upgrade][data-domain]").forEach((button) => {
     const entry = entryFor(button.dataset.domain);
     const def = snapshot.upgradeDefs.find((upgrade) => upgrade.id === button.dataset.upgrade);
@@ -158,61 +207,6 @@ function patchAffordability(displayBalance = snapshot?.sync?.balance || 0) {
     const maxed = def.maxLevel !== null && level >= def.maxLevel;
     button.disabled = maxed || sciCompare(balance, upgradeCost(def, level)) < 0;
   });
-}
-
-function normalizeSci(m, e = 0) {
-  if (!Number.isFinite(m) || m <= 0) return { ...SCI_ZERO };
-  let mantissa = m;
-  let exponent = Number.isFinite(e) ? Math.trunc(e) : 0;
-  while (mantissa >= 10) {
-    mantissa /= 10;
-    exponent += 1;
-  }
-  while (mantissa < 1) {
-    mantissa *= 10;
-    exponent -= 1;
-  }
-  return { m: mantissa, e: exponent };
-}
-
-function toSci(value) {
-  if (value && typeof value === "object" && "m" in value && "e" in value) {
-    return normalizeSci(Number(value.m), Number(value.e));
-  }
-  if (typeof value === "string") {
-    const match = value.trim().match(/^([+-]?\d+(?:\.\d+)?)(?:e([+-]?\d+))?$/i);
-    if (match) return normalizeSci(Number(match[1]), Number(match[2] || 0));
-  }
-  return normalizeSci(Number(value || 0), 0);
-}
-
-function sciToNumber(value) {
-  const sci = toSci(value);
-  if (sci.m === 0) return 0;
-  if (sci.e > 308) return Number.MAX_VALUE;
-  return sci.m * Math.pow(10, sci.e);
-}
-
-function sciCompare(a, b) {
-  const left = toSci(a);
-  const right = toSci(b);
-  if (left.m === 0 && right.m === 0) return 0;
-  if (left.e !== right.e) return left.e > right.e ? 1 : -1;
-  if (left.m === right.m) return 0;
-  return left.m > right.m ? 1 : -1;
-}
-
-function sciAdd(a, b) {
-  const left = toSci(a);
-  const right = toSci(b);
-  if (left.m === 0) return right;
-  if (right.m === 0) return left;
-  const diff = left.e - right.e;
-  if (diff > 16) return left;
-  if (diff < -16) return right;
-  const exponent = Math.max(left.e, right.e);
-  const mantissa = left.m * Math.pow(10, left.e - exponent) + right.m * Math.pow(10, right.e - exponent);
-  return normalizeSci(mantissa, exponent);
 }
 
 function money(value) {
@@ -246,31 +240,8 @@ function currentSlot(domain) {
   return snapshot.sync.slots.find((slot) => slot.assignedDomain === domain);
 }
 
-function upgradeLevel(entry, id) {
-  return Number(entry?.upgrades?.[id] || 0);
-}
-
-function upgradeCost(def, level) {
-  return Math.ceil(def.baseCost * Math.pow(def.growth, level));
-}
-
-function vaultCap(entry) {
-  const cold = upgradeLevel(entry, "coldStorage");
-  const trafficScale = Math.sqrt(domainBaseRate(entry) / BASE_RATE);
-  return BASE_RATE * 60 * 25 * trafficScale * Math.pow(1.32, cold);
-}
-
-function vaultRate(entry) {
-  const trafficScale = Math.sqrt(domainBaseRate(entry) / BASE_RATE);
-  return VAULT_RATE * trafficScale * vaultPumpMultiplier(upgradeLevel(entry, "storageDuration"));
-}
-
-function vaultPumpMultiplier(level) {
-  return Math.pow(1.3, level);
-}
-
 function tierBonus(slot) {
-  return snapshot.slotTiers.find((tier) => tier.tier === slot.tier)?.bonus || 1;
+  return slotTierBonus(slot);
 }
 
 function tierName(tier) {
@@ -290,8 +261,47 @@ function nextSlotTier(slot) {
 }
 
 function slotTierCost(slot, tier) {
-  const scale = snapshot.slotPrestigeCostScale || 1;
-  return Math.ceil(tier.cpCost * Math.pow(scale, Math.max(0, Number(slot?.id) - 3)));
+  return mathSlotTierCost(slot?.id, tier);
+}
+
+function cacheCoreLevel() {
+  return Number(snapshot?.sync?.cacheCoreLevel || 0);
+}
+
+function domainBaseRate(entry) {
+  return mathDomainBaseRate(entry, cacheCoreLevel());
+}
+
+function vaultCap(entry, coldLevel) {
+  return mathVaultCap(entry, coldLevel, cacheCoreLevel());
+}
+
+function vaultRate(entry, storageLevel) {
+  return mathVaultRate(entry, storageLevel, cacheCoreLevel());
+}
+
+function activeIncomeEstimate(entry, slot) {
+  return mathActiveIncomePerSecond(entry, slot, cacheCoreLevel());
+}
+
+function backgroundIncomePerSecond(entry, slot, backgroundSince, now) {
+  return mathBackgroundIncomePerSecond(entry, slot, backgroundSince, now, cacheCoreLevel());
+}
+
+function dailyFirstOpenBonus(entry, slot) {
+  return mathDailyFirstOpenBonus(entry, slot, cacheCoreLevel());
+}
+
+function dailyFirstOpenBonusForStreak(entry, slot, streak) {
+  return mathDailyFirstOpenBonusForStreak(entry, slot, streak, cacheCoreLevel());
+}
+
+function navigationPayoutForLevel(entry, slot, level) {
+  return mathNavigationPayoutForLevel(entry, slot, level, cacheCoreLevel());
+}
+
+function wakeBurstForLevel(entry, slot, level) {
+  return mathWakeBurstForLevel(entry, slot, level, cacheCoreLevel());
 }
 
 function streakDoneToday(entry) {
@@ -307,23 +317,9 @@ function visitDate(entry) {
   return entry?.lastVisited ? new Date(entry.lastVisited).toLocaleDateString("en-CA") : null;
 }
 
-function domainBaseRate(entry) {
-  return BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine"));
-}
-
-function tabMultiplier(level) {
-  return 1 + 0.15 * level;
-}
-
-function activeIncomeEstimate(entry, slot) {
-  return domainBaseRate(entry) * tabMultiplier(upgradeLevel(entry, "tabMultiplier")) * focusMultiplier(upgradeLevel(entry, "focusBonus")) * tierBonus(slot);
-}
-
 function backgroundIncomeEstimate(entry, slot, idleSeconds) {
-  const hum = 0.08 * upgradeLevel(entry, "backgroundHum");
-  if (hum <= 0) return 0;
-  const idle = 1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5);
-  return domainBaseRate(entry) * tabMultiplier(upgradeLevel(entry, "tabMultiplier")) * hum * idle * tierBonus(slot);
+  const now = Date.now();
+  return backgroundIncomePerSecond(entry, slot, now - idleSeconds * 1000, now);
 }
 
 function incomeFor(domain) {
@@ -387,7 +383,10 @@ function shell(content, activeNav = "slots") {
 }
 
 function renderModal() {
+  if (modal?.name === "welcomeBack") return renderWelcomeBackModal();
   if (modal?.name === "domainDetails") return renderDomainDetailsModal(modal.domain);
+  if (modal?.name === "cacheCore") return renderCacheCoreModal();
+  if (modal?.name === "confirm") return renderConfirmModal();
   if (modal !== "prestige") return "";
   const award = prestigeAwardEstimate();
   return `
@@ -403,6 +402,95 @@ function renderModal() {
         <div class="modal-actions">
           <button class="btn" data-action="cancelModal">CANCEL</button>
           <button class="btn btn-prestige" data-action="confirmPrestige">CLEAR CACHE</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderCacheCoreModal() {
+  const level = cacheCoreLevel();
+  const cost = cacheCoreCost(level);
+  const current = cacheCoreMultiplier(level);
+  const next = cacheCoreMultiplier(level + 1);
+  const affordable = snapshot.sync.cachePoints >= cost;
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="cacheCoreTitle">
+        <div class="modal-kicker">PERMANENT UPGRADE</div>
+        <h2 id="cacheCoreTitle">CACHE CORE</h2>
+        <p>Increase the global base domain rate for every domain and slot. Cache Core persists through Clear Cache resets.</p>
+        <div class="modal-reward">
+          <span>GLOBAL BASE RATE</span>
+          <strong>x${current.toFixed(2)} -> x${next.toFixed(2)}</strong>
+        </div>
+        <div class="detail-stat-section">
+          <div class="detail-stat-row">
+            <span>LEVEL</span>
+            <strong data-field="cacheCoreLevel">${level}</strong>
+          </div>
+          <div class="detail-stat-row">
+            <span>NEXT COST</span>
+            <strong>${cost} CP</strong>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" data-action="cancelModal">CLOSE</button>
+          <button class="btn btn-prestige" data-action="upgradeCacheCore" ${affordable ? "" : "disabled"}>UPGRADE</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderWelcomeBackModal() {
+  const award = pendingWelcomeBack();
+  if (!award) return "";
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel welcome-back-modal" role="dialog" aria-modal="true" aria-labelledby="welcomeBackTitle">
+        <div class="modal-kicker">WELCOME BACK</div>
+        <h2 id="welcomeBackTitle">CACHE ACCRUED</h2>
+        <p>Your active slots kept generating while the popup was closed.</p>
+        <div class="welcome-breakdown">
+          <div>
+            <span>FOCUS INCOME</span>
+            <strong>${money(award.focus)}</strong>
+          </div>
+          <div>
+            <span>BACKGROUND INCOME</span>
+            <strong>${money(award.background)}</strong>
+          </div>
+          <div class="welcome-total">
+            <span>TOTAL EARNED</span>
+            <strong>${money(award.total)}</strong>
+          </div>
+        </div>
+        <div class="modal-actions single">
+          <button class="btn btn-collect" data-action="collectWelcomeBack">COLLECT</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderConfirmModal() {
+  const variantClass = modal.variant ? ` modal-${modal.variant}` : "";
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel${variantClass}" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="modal-kicker">${modal.kicker || "CONFIRM ACTION"}</div>
+        <h2 id="confirmTitle">${modal.title}</h2>
+        <p>${modal.body}</p>
+        ${modal.reward ? `
+          <div class="modal-reward">
+            <span>${modal.reward.label}</span>
+            <strong>${modal.reward.value}</strong>
+          </div>
+        ` : ""}
+        <div class="modal-actions">
+          <button class="btn" data-action="cancelModal">CANCEL</button>
+          <button class="btn ${modal.variant === "danger" ? "btn-danger modal-danger-btn" : "btn-prestige"}" data-action="confirmModal">${modal.confirmLabel || "CONFIRM"}</button>
         </div>
       </section>
     </div>
@@ -432,14 +520,14 @@ function renderDomainDetailsModal(domain) {
           ${renderDetailStatSection("EVENT BONUSES", [
             ["Navigation", navLevel > 0 ? money(navigationPayoutForLevel(entry, slot, navLevel)) : "LOCKED"],
             ["Navigation Next", money(navigationPayoutForLevel(entry, slot, navLevel + 1))],
-            ["Wake Burst", wakeLevel > 0 ? money(wakeBurstForLevel(entry, wakeLevel)) : "LOCKED"],
-            ["Wake Next", money(wakeBurstForLevel(entry, wakeLevel + 1))]
+            ["Wake Burst", wakeLevel > 0 ? money(wakeBurstForLevel(entry, slot, wakeLevel)) : "LOCKED"],
+            ["Wake Next", money(wakeBurstForLevel(entry, slot, wakeLevel + 1))]
           ])}
           ${renderDetailStatSection("VAULT + STREAK", [
             ["Vault Stored", money(entry.vaultAmount)],
             ["Vault Cap", money(vaultCap(entry))],
             ["Vault Fill", `${money(vaultRate(entry))}/sec`],
-            ["Daily Bonus", money(dailyFirstOpenBonusEstimate(entry, slot))],
+            ["Daily Bonus", money(dailyFirstOpenBonus(entry, slot))],
             ["Next Streak Bonus", `x${(1 + nextStreak * 0.04).toFixed(2)}`],
             ["Next Daily Bonus", money(dailyFirstOpenBonusForStreak(entry, slot, nextStreak))]
           ])}
@@ -475,7 +563,7 @@ function renderDetailStatSection(title, rows) {
 }
 
 function prestigeAwardEstimate() {
-  return Math.max(0, Math.floor(Math.sqrt(sciToNumber(snapshot.sync.totalLifetimeEarned) / 1000000)) - Number(snapshot.sync.cpAlreadyClaimedFromLifetime || 0));
+  return Math.max(0, prestigeTotalFromLifetime(snapshot.sync.totalLifetimeEarned) - Number(snapshot.sync.cpAlreadyClaimedFromLifetime || 0));
 }
 
 function renderToast() {
@@ -501,10 +589,18 @@ function renderHeader() {
   return `
     <header class="header">
       <div class="balance-container">
-        <div class="balance" data-field="balance">${money(liveBalance())}</div>
-        <div class="income" data-field="income">+${money(snapshot.incomePerSecond)}/sec</div>
+        <div class="balance-row">
+          <div class="balance" data-field="balance">${money(liveBalance())}</div>
+          ${collectBurst ? `<div class="collect-burst">+${money(collectBurst)}</div>` : ""}
+        </div>
+        <div class="income" data-field="income">+${money(liveIncomePerSecond)}/sec</div>
       </div>
-      <button class="btn btn-prestige" data-action="prestige" data-field="cachePoints">CP: ${Math.floor(snapshot.sync.cachePoints)}</button>
+      <div class="header-actions">
+        <button class="btn btn-reset-cache" data-action="prestige">RESET</button>
+        <button class="prestige-currency" data-action="cacheCore" aria-label="Cache Points and permanent upgrades">
+          CP: <strong data-field="cachePoints">${Math.floor(snapshot.sync.cachePoints)}</strong>
+        </button>
+      </div>
     </header>
   `;
 }
@@ -672,7 +768,7 @@ function renderUpgrade(entry, def) {
         <div class="upgrade-details" data-tooltip="${escapeAttribute(tooltip)}">
           <div>
             <span class="upgrade-name">${def.name}</span>
-            <span class="upgrade-level">Lvl ${level}${def.maxLevel ? "/" + def.maxLevel : ""}</span>
+            <span class="upgrade-level">${level <= 0 ? "INACTIVE" : `Lvl ${level}${def.maxLevel ? "/" + def.maxLevel : ""}`}</span>
           </div>
           <div class="upgrade-desc">${summary}</div>
         </div>
@@ -697,9 +793,8 @@ function effectSummary(id, level) {
   const next = level + 1;
   const entry = currentDetailEntry();
   const slot = entry ? currentSlot(entry.domain) : null;
-  const cold = upgradeLevel(entry, "coldStorage");
   const map = {
-    trafficEngine: `Base income ${money(BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, level))}/sec -> ${money(BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, next))}/sec`,
+    trafficEngine: `Base income ${money(BASE_RATE * cacheCoreMultiplier(cacheCoreLevel()) * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, level))}/sec -> ${money(BASE_RATE * cacheCoreMultiplier(cacheCoreLevel()) * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, next))}/sec`,
     tabMultiplier: `Live income x${(1 + 0.15 * level).toFixed(2)} -> x${(1 + 0.15 * next).toFixed(2)}`,
     focusBonus: `Focused income x${focusMultiplier(level).toFixed(2)} -> x${focusMultiplier(next).toFixed(2)}`,
     navigationBonus: `Navigation payout ${money(navigationPayoutForLevel(entry, slot, level))} -> ${money(navigationPayoutForLevel(entry, slot, next))}`,
@@ -708,7 +803,7 @@ function effectSummary(id, level) {
     dailyBoot: `Daily bonus x${dailyBootMultiplier(level).toFixed(2)} -> x${dailyBootMultiplier(next).toFixed(2)}`,
     backgroundHum: `Background income ${(8 * level).toFixed(0)}% -> ${(8 * next).toFixed(0)}% of live base`,
     idleDepth: `Max idle boost x${(1 + 0.5 * level).toFixed(2)} -> x${(1 + 0.5 * next).toFixed(2)}`,
-    wakeBonus: `Wake burst ${money(wakeBurstForLevel(entry, level))} -> ${money(wakeBurstForLevel(entry, next))}`
+    wakeBonus: `Wake burst ${money(wakeBurstForLevel(entry, slot, level))} -> ${money(wakeBurstForLevel(entry, slot, next))}`
   };
   return map[id] || "";
 }
@@ -755,46 +850,12 @@ function currentDetailEntry() {
 
 function vaultCapForLevels(cold) {
   const entry = currentDetailEntry();
-  const base = entry ? domainBaseRate(entry) : BASE_RATE;
-  const trafficScale = Math.sqrt(base / BASE_RATE);
-  return BASE_RATE * 60 * 25 * trafficScale * Math.pow(1.32, cold);
+  return vaultCap(entry || { upgrades: {} }, cold);
 }
 
 function vaultRateForLevel(level) {
   const entry = currentDetailEntry();
-  const base = entry ? domainBaseRate(entry) : BASE_RATE;
-  const trafficScale = Math.sqrt(base / BASE_RATE);
-  return VAULT_RATE * trafficScale * vaultPumpMultiplier(level);
-}
-
-function navigationPayoutForLevel(entry, slot, level) {
-  if (!entry || !slot || level <= 0) return 0;
-  return dailyFirstOpenBonusEstimate(entry, slot) * 0.13 * (1 + 0.18 * level);
-}
-
-function focusMultiplier(level) {
-  return 1 + 0.35 * level + 0.01 * Math.pow(level, 1.2);
-}
-
-function dailyBootMultiplier(level) {
-  return 1 + 0.18 * Math.pow(level, 0.95);
-}
-
-function wakeBurstForLevel(entry, level) {
-  const base = entry ? domainBaseRate(entry) : BASE_RATE;
-  return base * 65 * Math.pow(level, 1.1);
-}
-
-function dailyFirstOpenBonusEstimate(entry, slot) {
-  return dailyFirstOpenBonusForStreak(entry, slot, entry.currentStreak);
-}
-
-function dailyFirstOpenBonusForStreak(entry, slot, streak) {
-  const dailyBoot = upgradeLevel(entry, "dailyBoot");
-  const baseDaily = Math.max(20, domainBaseRate(entry) * 60 * 35);
-  const bootMultiplier = dailyBootMultiplier(dailyBoot);
-  const streakMultiplier = 1 + Math.min(Number(streak || 0), 14) * 0.04;
-  return baseDaily * bootMultiplier * streakMultiplier * (1 + (slot.streakBonusTier || 0) * 0.15);
+  return vaultRate(entry || { upgrades: {} }, level);
 }
 
 function renderLibrary(pickSlotId = null) {
@@ -846,7 +907,7 @@ function renderLibraryItem(entry, pickSlotId) {
         </div>
       </div>
       <button class="btn" data-action="${pickSlotId ? "assign" : "domainSummary"}" data-domain="${entry.domain}" ${pickSlotId ? `data-slot="${pickSlotId}"` : ""} ${pickSlotId && isSlotted ? "disabled" : ""}>
-        ${pickSlotId ? (isSlotted ? "SLOTTED" : "ASSIGN") : "VIEW"}
+        ${pickSlotId ? (isSlotted ? `SLOT ${entry.slotId}` : "ASSIGN") : "VIEW"}
       </button>
     </div>
   `;
@@ -902,16 +963,22 @@ async function handleAction(event) {
     if (result?.ok) routeToAssignedDomain(slotId);
   }
   if (action === "assign") {
-    if (confirm(`Assign ${node.dataset.domain} to slot ${node.dataset.slot}?`)) {
-      const slotId = Number(node.dataset.slot);
-      const result = await act("assignDomain", {
+    const slotId = Number(node.dataset.slot);
+    modal = {
+      name: "confirm",
+      kicker: "SLOT ASSIGNMENT",
+      title: `ASSIGN SLOT ${slotId}?`,
+      body: `Assign ${node.dataset.domain} to this slot.`,
+      confirmLabel: "ASSIGN",
+      actionType: "assignDomain",
+      payload: {
         slotId,
         domain: node.dataset.domain,
         fromCurrentSite: Boolean(snapshot.currentSite?.valid),
         currentDomain: snapshot.currentSite?.domain || ""
-      });
-      if (result?.ok) routeToAssignedDomain(slotId);
-    }
+      },
+      after: { routeAssignedSlot: slotId }
+    };
   }
   if (action === "buy") await act("buyUpgrade", { domain: node.dataset.domain, upgradeId: node.dataset.upgrade, mode: buyMode });
   if (action === "claim") await act("claimRevisit", { domain: node.dataset.domain });
@@ -919,17 +986,71 @@ async function handleAction(event) {
   if (action === "tier") await act("upgradeSlotTier", { slotId: Number(node.dataset.slot) });
   if (action === "devCash") await act("devAddCash", { amount: 10000 });
   if (action === "devPrestige") await act("devAddCachePoints", { amount: 10 });
-  if (action === "devReset" && confirm("Reset only current cash and CP?")) await act("devResetCashAndCachePoints");
-  if (action === "remove" && confirm("Remove this domain from the slot?")) await act("removeDomain", { slotId: Number(node.dataset.slot) });
+  if (action === "devReset") {
+    modal = {
+      name: "confirm",
+      variant: "danger",
+      kicker: "DEV RESET",
+      title: "RESET CASH + CP?",
+      body: "This resets only current cash and Cache Points. Domain history and slots stay intact.",
+      confirmLabel: "RESET",
+      actionType: "devResetCashAndCachePoints"
+    };
+  }
+  if (action === "remove") {
+    modal = {
+      name: "confirm",
+      variant: "danger",
+      kicker: "SLOT REMOVAL",
+      title: "REMOVE DOMAIN?",
+      body: "Move this domain back to the library and empty the slot.",
+      confirmLabel: "REMOVE",
+      actionType: "removeDomain",
+      payload: { slotId: Number(node.dataset.slot) }
+    };
+  }
   if (action === "prestige") modal = "prestige";
+  if (action === "cacheCore") modal = { name: "cacheCore" };
+  if (action === "upgradeCacheCore") await act("upgradeCacheCore");
   if (action === "domainDetails") modal = { name: "domainDetails", domain: node.dataset.domain };
   if (action === "cancelModal") modal = null;
   if (action === "confirmPrestige") {
     modal = null;
     await act("prestige");
   }
+  if (action === "confirmModal" && modal?.name === "confirm") {
+    const pending = modal;
+    modal = null;
+    const result = await act(pending.actionType, pending.payload || {});
+    if (result?.ok && pending.after?.routeAssignedSlot) routeToAssignedDomain(pending.after.routeAssignedSlot);
+  }
+  if (action === "collectWelcomeBack") await collectWelcomeBack();
 
   render();
+}
+
+async function collectWelcomeBack() {
+  const result = await send("collectWelcomeBack");
+  if (!result?.ok) {
+    showToast(result?.error || "Action failed.", "warning");
+    return;
+  }
+  const award = result.award?.total || snapshot?.welcomeBack?.total || 0;
+  modal = null;
+  snapshot = await send("snapshot");
+  syncWelcomeBackModal();
+  resetLiveTickerBaseline();
+  showCollectBurst(award);
+}
+
+function showCollectBurst(amount) {
+  collectBurst = amount;
+  if (collectBurstTimer) clearTimeout(collectBurstTimer);
+  collectBurstTimer = setTimeout(() => {
+    collectBurst = null;
+    collectBurstTimer = null;
+    render();
+  }, 1300);
 }
 
 function routeToAssignedDomain(slotId) {
@@ -941,6 +1062,7 @@ async function act(type, payload = {}) {
   const result = await send(type, payload);
   if (!result?.ok) showToast(result?.error || "Action failed.", "warning");
   else if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${result.award} CP.`);
+  else if (type === "upgradeCacheCore") showToast(`CACHE CORE LEVEL ${result.level}.`);
   else showToast("SUCCESS");
   snapshot = await send("snapshot");
   resetLiveTickerBaseline();

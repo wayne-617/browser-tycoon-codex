@@ -171,20 +171,20 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
 - `Focus Bonus`
   - Extra multiplier when the domain is the active foreground domain
   - Infinite levels
-  - Growth rate: `1.7x`
+  - Growth rate: `1.55x`
 - `Navigation Bonus`
   - Grants a bonus payout for qualifying top-level in-domain navigations
   - Trigger: top-level navigation within the same slotted domain
   - Cooldown: `15` seconds per domain
   - Same-page navigations can re-trigger after cooldown
-  - Intended value: around `10%` of that domain's Daily First-Open Bonus target value
+  - Intended value: around `13%` of that domain's Daily First-Open Bonus target value
   - Infinite levels
   - Growth rate: `1.6x`
 - `Traffic Engine`
   - Increases the domain's base income before active, background, navigation, and wake calculations
   - Infinite levels
-  - Growth rate: `1.42x`
-  - Effect scales domain base rate by `1.18x` per level
+  - Growth rate: `1.5x`
+  - Effect scales domain base rate by `1.2x` per level
 
 #### Category B: Vault and Passive Storage
 
@@ -192,33 +192,33 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
   - Increases vault cap
   - Infinite levels
   - Growth rate: `1.55x`
-  - Effect scales vault cap by `1.18x` per level from a 6-hour base cap
+  - Effect scales vault cap by `1.35x` per level from the base cap
 - `Vault Pump`
   - Increases the rate that vault value accumulates
   - Uses the internal upgrade id `storageDuration` for save compatibility
   - Infinite levels
   - Growth rate: `1.55x`
-  - Effect scales vault fill rate by `1.15x` per level
+  - Effect scales vault fill rate by `1.3x` per level
 - `Daily Boot`
   - Increases the value of each daily streak day for that domain
   - Uses the internal upgrade id `dailyBoot`
   - Infinite levels
-  - Growth rate: `1.7x`
+  - Growth rate: `1.6x`
 
 #### Category C: Background Behavior
 
 - `Background Hum`
   - Lets a domain earn a percentage of active income while background-open
   - Infinite levels
-  - Growth rate: `1.6x`
+  - Growth rate: `1.55x`
 - `Idle Depth`
   - Increases background income the longer the domain remains backgrounded
   - Infinite levels
-  - Growth rate: `1.8x`
+  - Growth rate: `1.75x`
 - `Wake Bonus`
   - Grants a burst when a background domain becomes active again
   - Infinite levels
-  - Growth rate: `2.0x`
+  - Growth rate: `1.6x`
 
 ### 3.2 Slot Prestige Upgrades
 
@@ -226,11 +226,22 @@ Slot upgrades are purchased with Cache Points (`CP`) and persist through prestig
 
 #### Slot tier upgrades
 
-- Tier I: `1 CP`, `+10%`
-- Tier II: `3 CP`, `+25%`
-- Tier III: `8 CP`, `+50%`
-- Tier IV: `20 CP`, `+100%`
-- Tier V: `50 CP`, `+200%`
+Slot tier bonuses multiply live active income, background income, and wake burst payouts for the domain currently assigned to that slot.
+
+- Tier I: `1 CP`, `x1.20`
+- Tier II: `3 CP`, `x1.50`
+- Tier III: `8 CP`, `x2.00`
+- Tier IV: `20 CP`, `x2.75`
+- Tier V: `50 CP`, `x4.00`
+
+For slots 4 and higher, the CP cost of each tier scales by slot index:
+
+```txt
+slot_tier_cost(slot_id, tier) =
+  ceil(base_tier_cost(tier) x 1.5^(max(0, slot_id - 3)))
+```
+
+Buying Tier I or higher on slot 4+ permanently preserves that slot unlock through future Clear Cache resets.
 
 #### Slot streak upgrade
 
@@ -239,13 +250,28 @@ Slot upgrades are purchased with Cache Points (`CP`) and persist through prestig
   - Increases the payout multiplier from that slot's current slotted domain streak
   - Belongs to the slot, not the domain
 
-### 3.3 Global Upgrades
+#### Cache Core
+
+`Cache Core` is a global permanent upgrade purchased with Cache Points (`CP`). It persists through Clear Cache resets and increases the base domain rate for every domain and slot.
+
+```txt
+cache_core_multiplier = 1.5^cache_core_level
+cache_core_cost(current_level) = ceil(5 x 2.0^current_level)
+```
+
+Cache Core applies before per-domain Traffic Engine scaling:
+
+```txt
+domain_base_rate =
+  BASE_RATE x cache_core_multiplier x 1.2^traffic_engine_level
+```
+
+### 3.3 Future Global Upgrades
 
 These remain in concept but are not fully specified for implementation yet:
 
 - Tab count multiplier bands
 - Browser search bonus
-- Global flat income multiplier
 - Bookmark visit bonus
 
 Incognito-specific upgrades are removed from scope because incognito is permanently invalid in v1.
@@ -268,7 +294,7 @@ Where:
 
 ```txt
 domain_base_rate =
-  BASE_RATE x 1.18^traffic_engine_level
+  BASE_RATE x cache_core_multiplier x 1.2^traffic_engine_level
 ```
 
 Where `state_bonus` is exactly one of:
@@ -293,13 +319,13 @@ payout =
 - Cooldown: `15` seconds per domain
 - Same-page navigations can re-trigger after cooldown
 - Scope: slotted domains only
-- Target tuning: one navigation payout should be about `10%` of that domain's Daily First-Open Bonus target value
+- Target tuning: one navigation payout should be about `13%` of that domain's Daily First-Open Bonus target value
 
 ```txt
 navigation_payout =
   daily_first_open_bonus(entry, slot)
-  x 0.10
-  x (1 + 0.15 x navigation_bonus_level)
+  x 0.13
+  x (1 + 0.18 x navigation_bonus_level)
 ```
 
 Level `0` disables the payout. Once at least one level is purchased, the payout uses the formula above.
@@ -325,8 +351,8 @@ Each currently slotted domain has its own streak.
 
 ```txt
 daily_first_open_bonus =
-  max(20, domain_base_rate x 60 x 30)
-  x (1 + 0.12 x daily_boot_level^0.85)
+  max(20, domain_base_rate x 60 x 35)
+  x (1 + 0.18 x daily_boot_level^0.95)
   x (1 + min(current_streak, 14) x 0.04)
   x (1 + 0.15 x slot_streak_bonus_tier)
 ```
@@ -353,6 +379,7 @@ Prestige is called **Clear Cache**. It resets run-level progression in exchange 
 - Unlocked slot count where applicable
 - Slot tier upgrades
 - Slot streak bonus upgrades
+- Cache Core level
 - Previously claimed lifetime prestige credit
 
 ### 5.4 Corrected Prestige Formula
@@ -379,7 +406,7 @@ This prevents duplicate prestige gains by repeatedly prestiging at the same life
 ### 5.5 Prestige Tuning Constant
 
 ```txt
-PRESTIGE_DIVISOR = 1,000,000   [TUNE]
+PRESTIGE_DIVISOR = 100,000   [TUNE]
 ```
 
 This remains the primary pacing lever.
@@ -475,6 +502,11 @@ value = m x 10^e
 
 The current implementation stores `balance`, `totalLifetimeEarned`, domain `vaultAmount`, and domain `lifetimeEarned` this way. Cost constants and per-second rates still use normal numbers, then convert through the scientific helpers when applied to stored balances.
 
+Implementation location:
+
+- Scientific currency helpers live in `v1/game-math.js`
+- `v1/background.js` and `v1/popup.js` must import/use those helpers rather than reimplementing them locally
+
 ### 7.4 Slot Object
 
 Each slot should support at minimum:
@@ -502,6 +534,48 @@ The implementation may choose the exact shape, but the PRD requires domain-level
 - Best-effort sync of upgrades and core balances is sufficient
 - Last-write-wins remains acceptable for sync conflicts in v1
 
+### 7.7 Implementation Organization
+
+The v1 implementation intentionally separates gameplay math from browser/runtime wiring.
+
+Current extension file organization:
+
+- `v1/manifest.json`: Manifest V3 metadata, permissions, action popup, and service worker entry
+- `v1/game-math.js`: shared economy constants, currency helpers, upgrade definitions, slot tiers, and pure formulas
+- `v1/background.js`: service worker runtime authority, storage migration, accrual settlement, tab/presence listeners, and game actions
+- `v1/popup.html`: popup shell that loads `game-math.js`, `popup.css`, and `popup.js`
+- `v1/popup.js`: popup routing, rendering, modal state, toasts, user interaction handlers, and presentation estimates via `BrowserTycoonMath`
+- `v1/popup.css`: popup visual theme, layout, slot cards, modals, tooltips, and detail/library styling
+- `v1/icons/`: bundled extension and temporary upgrade/system icon assets
+
+Authoritative math and balance definitions live in `v1/game-math.js`:
+
+- `BASE_RATE`
+- `VAULT_RATE`
+- `TRAFFIC_ENGINE_MULTIPLIER`
+- `SLOT_PRESTIGE_COST_SCALE`
+- `UPGRADE_DEFS`
+- `SLOT_TIERS`
+- Scientific currency helpers
+- Upgrade cost, slot cost, income, vault, daily bonus, navigation bonus, wake bonus, and prestige formulas
+
+Runtime authority lives in `v1/background.js`:
+
+- Chrome event listeners
+- storage reads/writes and migrations
+- timestamp settlement
+- presence rebuilds
+- purchase, claim, slot, prestige, and dev actions
+
+Presentation lives in `v1/popup.js`:
+
+- routing, rendering, modal state, toasts, and user interactions
+- display formatting
+- live ticker projection
+- calls into `v1/game-math.js` for any displayed economy estimate
+
+The popup must not duplicate gameplay formulas. If the popup needs a new estimate, either use an existing function from `v1/game-math.js` or add a pure exported function there first.
+
 ## 8. Growth and Balance System
 
 ### 8.1 Core Principle
@@ -518,32 +592,35 @@ total_cost_to_buy_n_levels =
 
 Initial tuning targets:
 
-- Tab Multiplier: base `$25`, growth `1.6`
-- Focus Bonus: base `$30`, growth `1.55`
-- Navigation Bonus: base `$35`, growth `1.6`
-- Cold Storage: base `$60`, growth `1.55`
-- Vault Pump: base `$80`, growth `1.55`
-- Traffic Engine: base `$50`, growth `1.42`
-- Daily Boot: base `$120`, growth `1.7`
-- Background Hum: base `$40`, growth `1.55`
-- Idle Depth: base `$90`, growth `1.8`
-- Wake Bonus: base `$150`, growth `2.0`
+- Tab Multiplier: base `$35`, growth `1.45`
+- Focus Bonus: base `$25`, growth `1.4`
+- Navigation Bonus: base `$60`, growth `1.45`
+- Cold Storage: base `$50`, growth `1.55`
+- Vault Pump: base `$60`, growth `1.55`
+- Traffic Engine: base `$25`, growth `1.4`
+- Daily Boot: base `$50`, growth `1.4`
+- Background Hum: base `$80`, growth `1.55`
+- Idle Depth: base `$100`, growth `1.55`
+- Wake Bonus: base `$125`, growth `1.45`
+
+The implementation source of truth for these values is `UPGRADE_DEFS` in `v1/game-math.js`.
 
 ### 8.3 Upgrade Effect Targets
 
 ```txt
-domain_base_rate(level) = BASE_RATE x 1.18^traffic_engine_level
+domain_base_rate(level) = BASE_RATE x 1.2^traffic_engine_level
 tab_multiplier_bonus(level) = 1 + (0.15 x level)
-focus_bonus(level) = 1 + (0.30 x level)
+focus_bonus(level) = 1 + (0.35 x level) + (0.01 x level^1.2)
 navigation_payout(level) =
   daily_first_open_bonus
-  x 0.10
-  x (1 + 0.15 x navigation_bonus_level)
+  x 0.13
+  x (1 + 0.18 x navigation_bonus_level)
 
-vault_cap(level) = BASE_RATE x 60 x 60 x 3 x 1.18^cold_storage_level
-vault_rate(level) = BASE_RATE x 0.5 x 1.15^vault_pump_level
+traffic_scale = sqrt(domain_base_rate / BASE_RATE)
+vault_cap(level) = BASE_RATE x 60 x 25 x traffic_scale x 1.32^cold_storage_level
+vault_rate(level) = BASE_RATE x 0.02 x traffic_scale x 1.3^vault_pump_level
 
-background_hum_pct(level) = 0.06 x level
+background_hum_pct(level) = 0.08 x level
 idle_depth_factor(t, lvl) = 1 + 0.1 x lvl x min(t / 300, 5)
 background_income =
   domain_base_rate
@@ -553,18 +630,20 @@ background_income =
   x slot_tier_bonus
 
 daily_first_open_bonus =
-  max(20, domain_base_rate x 60 x 30)
-  x (1 + 0.12 x daily_boot_level^0.85)
+  max(20, domain_base_rate x 60 x 35)
+  x (1 + 0.18 x daily_boot_level^0.95)
   x (1 + min(current_streak, 14) x 0.04)
   x (1 + 0.15 x slot_streak_bonus_tier)
 
-wake_bonus(lvl) = domain_base_rate x 30 x lvl x slot_tier_bonus
+wake_bonus(lvl) = domain_base_rate x 65 x lvl^1.1 x slot_tier_bonus
 ```
+
+The implementation source of truth for these formulas is `v1/game-math.js`. The formulas above must be updated in the same change as any tuning change to `v1/game-math.js`.
 
 ### 8.4 Base Rate
 
 ```txt
-BASE_RATE = $0.10 / sec   [TUNE]
+BASE_RATE = $0.25 / sec   [TUNE]
 ```
 
 ### 8.5 Vault Design
@@ -572,7 +651,7 @@ BASE_RATE = $0.10 / sec   [TUNE]
 Vault should not outcompete live activity.
 
 ```txt
-base_vault_rate = BASE_RATE x 0.5   [TUNE]
+base_vault_rate = BASE_RATE x 0.02   [TUNE]
 ```
 
 Vault cap and fill speed are affected by separate upgrades:
@@ -580,9 +659,25 @@ Vault cap and fill speed are affected by separate upgrades:
 - `Cold Storage` increases total vault capacity
 - `Vault Pump` increases the per-second vault fill rate
 
-Cold Storage is tuned around players who collect roughly `2-3` times per day. At equal Cold Storage and Vault Pump levels, the cap holds about `6` hours of vault fill; collecting twice or three times per day generally wants Cold Storage a few levels ahead of Vault Pump.
+Cold Storage is tuned around players who collect roughly `3` times per day. Cold Storage scales slightly faster than Vault Pump (`1.35x` cap per level vs. `1.30x` fill rate per level), so capacity should keep pace with roughly 8-hour vault check intervals while staying a little ahead of vault income growth.
 
-### 8.6 Balance Targets
+### 8.6 Balance Change Workflow
+
+Future economy changes should follow this sequence:
+
+1. Update constants or formulas in `v1/game-math.js`.
+2. Keep `v1/background.js` as the runtime authority, but do not add formula copies there unless the function belongs in `v1/game-math.js`.
+3. Keep `v1/popup.js` presentation-only; use exported math helpers for estimates, affordance checks, and tooltips.
+4. If a new economy value must appear in both background and popup, add a named pure function to `v1/game-math.js` and call it from both places.
+5. Update this PRD's formula and tuning sections in the same change.
+6. Run at minimum:
+   - `node --check v1/game-math.js`
+   - `node --check v1/background.js`
+   - `node --check v1/popup.js`
+   - a smoke test that loads `v1/game-math.js` and checks representative formulas
+7. Manually verify at least one popup detail screen where the changed value is displayed.
+
+### 8.7 Balance Targets
 
 - Time to first slot unlock: `15-20` minutes of active browsing
 - Time to fill 6 slots: `3-5` days

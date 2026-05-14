@@ -1,123 +1,35 @@
-const BASE_RATE = 0.25;
-const VAULT_RATE = BASE_RATE * 0.02;
-const TRAFFIC_ENGINE_MULTIPLIER = 1.2;
-const PRESTIGE_DIVISOR = 1000000;
+importScripts("game-math.js");
+
+const {
+  SCI_ZERO,
+  UPGRADE_DEFS,
+  SLOT_TIERS,
+  SLOT_PRESTIGE_COST_SCALE,
+  emptyUpgrades,
+  toSci,
+  sciToNumber,
+  sciCompare,
+  sciAdd,
+  sciSub,
+  prestigeTotalFromLifetime,
+  cacheCoreMultiplier,
+  cacheCoreCost,
+  getUpgradeLevel,
+  upgradeCost,
+  slotTierCost,
+  slotUnlockCost,
+  vaultCap,
+  vaultRate,
+  domainIncomeForState,
+  dailyFirstOpenBonus,
+  navigationPayoutForLevel,
+  wakeBurstForLevel
+} = BrowserTycoonMath;
+
 const ALARM_NAME = "browser-tycoon-accrual";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
+const WELCOME_BACK_MIN_SECONDS = 60;
 const TODAY = () => new Date().toLocaleDateString("en-CA");
-const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
-
-const UPGRADE_DEFS = [
-  { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 25, growth: 1.6, maxLevel: null },
-  { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 25, growth: 1.55, maxLevel: null },
-  { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 35, growth: 1.6, maxLevel: null },
-  { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 60, growth: 1.55, maxLevel: null },
-  { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 75, growth: 1.55, maxLevel: null },
-  { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 25, growth: 1.5, maxLevel: null },
-  { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 80, growth: 1.6, maxLevel: null },
-  { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 40, growth: 1.55, maxLevel: null },
-  { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 90, growth: 1.75, maxLevel: null },
-  { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 110, growth: 1.6, maxLevel: null }
-];
-
-const SLOT_TIERS = [
-  { tier: 0, cpCost: 0, bonus: 1 },
-  { tier: 1, cpCost: 1, bonus: 1.1 },
-  { tier: 2, cpCost: 3, bonus: 1.25 },
-  { tier: 3, cpCost: 8, bonus: 1.5 },
-  { tier: 4, cpCost: 20, bonus: 2 },
-  { tier: 5, cpCost: 50, bonus: 3 }
-];
-const SLOT_PRESTIGE_COST_SCALE = 1.5;
-
-const emptyUpgrades = () => Object.fromEntries(UPGRADE_DEFS.map((upgrade) => [upgrade.id, 0]));
-
-function normalizeSci(m, e = 0) {
-  if (!Number.isFinite(m) || m <= 0) return { ...SCI_ZERO };
-  let mantissa = m;
-  let exponent = Number.isFinite(e) ? Math.trunc(e) : 0;
-  while (mantissa >= 10) {
-    mantissa /= 10;
-    exponent += 1;
-  }
-  while (mantissa < 1) {
-    mantissa *= 10;
-    exponent -= 1;
-  }
-  return { m: mantissa, e: exponent };
-}
-
-function toSci(value) {
-  if (value && typeof value === "object" && "m" in value && "e" in value) {
-    return normalizeSci(Number(value.m), Number(value.e));
-  }
-  if (typeof value === "string") {
-    const match = value.trim().match(/^([+-]?\d+(?:\.\d+)?)(?:e([+-]?\d+))?$/i);
-    if (match) return normalizeSci(Number(match[1]), Number(match[2] || 0));
-  }
-  return normalizeSci(Number(value || 0), 0);
-}
-
-function sciToNumber(value) {
-  const sci = toSci(value);
-  if (sci.m === 0) return 0;
-  if (sci.e > 308) return Number.MAX_VALUE;
-  return sci.m * Math.pow(10, sci.e);
-}
-
-function sciCompare(a, b) {
-  const left = toSci(a);
-  const right = toSci(b);
-  if (left.m === 0 && right.m === 0) return 0;
-  if (left.e !== right.e) return left.e > right.e ? 1 : -1;
-  if (left.m === right.m) return 0;
-  return left.m > right.m ? 1 : -1;
-}
-
-function sciAdd(a, b) {
-  const left = toSci(a);
-  const right = toSci(b);
-  if (left.m === 0) return right;
-  if (right.m === 0) return left;
-  const diff = left.e - right.e;
-  if (diff > 16) return left;
-  if (diff < -16) return right;
-  const exponent = Math.max(left.e, right.e);
-  const mantissa = left.m * Math.pow(10, left.e - exponent) + right.m * Math.pow(10, right.e - exponent);
-  return normalizeSci(mantissa, exponent);
-}
-
-function sciSub(a, b) {
-  if (sciCompare(a, b) <= 0) return { ...SCI_ZERO };
-  const left = toSci(a);
-  const right = toSci(b);
-  const diff = left.e - right.e;
-  if (diff > 16) return left;
-  const mantissa = left.m - right.m * Math.pow(10, right.e - left.e);
-  return normalizeSci(mantissa, left.e);
-}
-
-function sciMulNumber(a, factor) {
-  return normalizeSci(toSci(a).m * Number(factor || 0), toSci(a).e);
-}
-
-function sciMin(a, b) {
-  return sciCompare(a, b) <= 0 ? toSci(a) : toSci(b);
-}
-
-function prestigeTotalFromLifetime(lifetime) {
-  const sci = toSci(lifetime);
-  if (sci.m === 0) return 0;
-  let mantissa = sci.m;
-  let exponent = sci.e - 6;
-  if (exponent % 2 !== 0) {
-    mantissa *= 10;
-    exponent -= 1;
-  }
-  const cp = Math.sqrt(mantissa) * Math.pow(10, exponent / 2);
-  if (!Number.isFinite(cp)) return Number.MAX_SAFE_INTEGER;
-  return Math.floor(Math.min(cp, Number.MAX_SAFE_INTEGER));
-}
 
 function normalizeCurrencyState(sync, local) {
   sync.balance = toSci(sync.balance);
@@ -134,6 +46,7 @@ function defaultSyncState() {
     totalLifetimeEarned: 0,
     cachePoints: 0,
     cpAlreadyClaimedFromLifetime: 0,
+    cacheCoreLevel: 0,
     unlockedSlots: 3,
     prestigeCount: 0,
     onboardingComplete: false,
@@ -153,7 +66,10 @@ function defaultLocalState() {
     domainLibrary: {},
     presence: {},
     lastAccrualAt: Date.now(),
-    lastNavigationBonusAt: {}
+    lastNavigationBonusAt: {},
+    lastPopupSeenAt: 0,
+    lastPopupBalance: null,
+    pendingWelcomeBack: null
   };
 }
 
@@ -176,6 +92,7 @@ async function saveState(sync, local) {
       totalLifetimeEarned: sync.totalLifetimeEarned,
       cachePoints: sync.cachePoints,
       cpAlreadyClaimedFromLifetime: sync.cpAlreadyClaimedFromLifetime,
+      cacheCoreLevel: sync.cacheCoreLevel,
       unlockedSlots: sync.unlockedSlots,
       prestigeCount: sync.prestigeCount,
       onboardingComplete: sync.onboardingComplete,
@@ -186,7 +103,10 @@ async function saveState(sync, local) {
       domainLibrary: local.domainLibrary,
       presence: local.presence,
       lastAccrualAt: local.lastAccrualAt,
-      lastNavigationBonusAt: local.lastNavigationBonusAt
+      lastNavigationBonusAt: local.lastNavigationBonusAt,
+      lastPopupSeenAt: local.lastPopupSeenAt,
+      lastPopupBalance: local.lastPopupBalance,
+      pendingWelcomeBack: local.pendingWelcomeBack
     })
   ]);
 }
@@ -255,86 +175,6 @@ function getDomainEntry(local, domain) {
   return local.domainLibrary[domain];
 }
 
-function getUpgradeLevel(entry, id) {
-  return Number(entry?.upgrades?.[id] || 0);
-}
-
-function upgradeCost(def, level) {
-  return Math.ceil(def.baseCost * Math.pow(def.growth, level));
-}
-
-function floorToSignificantFigures(value, figures = 2) {
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  const scale = Math.pow(10, Math.floor(Math.log10(value)) - figures + 1);
-  return Math.floor(value / scale) * scale;
-}
-
-function slotTierBonus(slot) {
-  return SLOT_TIERS.find((tier) => tier.tier === slot.tier)?.bonus || 1;
-}
-
-function slotTierCost(slotId, tier) {
-  const baseCost = SLOT_TIERS.find((item) => item.tier === tier)?.cpCost;
-  if (!Number.isFinite(baseCost)) return Infinity;
-  const slotScale = Math.pow(SLOT_PRESTIGE_COST_SCALE, Math.max(0, Number(slotId) - 3));
-  return Math.ceil(baseCost * slotScale);
-}
-
-function slotUnlockCost(slotNumber) {
-  if (slotNumber <= 3) return 0;
-  if (slotNumber === 4) return 500;
-  return floorToSignificantFigures(500 * Math.pow(5, Math.pow(slotNumber - 3.75, 1.35)));
-}
-
-function vaultCap(entry) {
-  const cold = getUpgradeLevel(entry, "coldStorage");
-  const trafficScale = Math.sqrt(domainBaseRate(entry) / BASE_RATE);
-  const baseCap = BASE_RATE * 60 * 25 * trafficScale;
-  return baseCap * Math.pow(1.32, cold);
-}
-
-function vaultRate(entry) {
-  const trafficScale = Math.sqrt(domainBaseRate(entry) / BASE_RATE);
-  return VAULT_RATE * trafficScale * Math.pow(1.3, getUpgradeLevel(entry, "storageDuration"));
-}
-
-function domainBaseRate(entry) {
-  return BASE_RATE * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, getUpgradeLevel(entry, "trafficEngine"));
-}
-
-function activeIncomePerSecond(entry, slot) {
-  const tab = 1 + 0.15 * getUpgradeLevel(entry, "tabMultiplier");
-  const focusLevel = getUpgradeLevel(entry, "focusBonus");
-  const focus = 1 + 0.35 * focusLevel + 0.01 * Math.pow(focusLevel, 1.2);
-  return domainBaseRate(entry) * tab * focus * slotTierBonus(slot);
-}
-
-function backgroundIncomePerSecond(entry, slot, backgroundSince, now) {
-  const hum = 0.08 * getUpgradeLevel(entry, "backgroundHum");
-  if (hum <= 0) return 0;
-  const idleLevel = getUpgradeLevel(entry, "idleDepth");
-  const idleSeconds = Math.max(0, (now - (backgroundSince || now)) / 1000);
-  const idle = 1 + 0.1 * idleLevel * Math.min(idleSeconds / 300, 5);
-  const tab = 1 + 0.15 * getUpgradeLevel(entry, "tabMultiplier");
-  return domainBaseRate(entry) * tab * hum * idle * slotTierBonus(slot);
-}
-
-function domainIncomeForState(entry, slot, presence, now) {
-  if (!presence) return 0;
-  if (presence.state === "active") return activeIncomePerSecond(entry, slot);
-  if (presence.state === "background") return backgroundIncomePerSecond(entry, slot, presence.backgroundSince, now);
-  return 0;
-}
-
-function dailyFirstOpenBonus(entry, slot) {
-  const dailyBoot = getUpgradeLevel(entry, "dailyBoot");
-  const slotStreak = slot?.streakBonusTier || 0;
-  const baseDaily = Math.max(20, domainBaseRate(entry) * 60 * 35);
-  const bootMultiplier = 1 + 0.18 * Math.pow(dailyBoot, 0.95);
-  const streakMultiplier = 1 + Math.min(entry.currentStreak, 14) * 0.04;
-  return baseDaily * bootMultiplier * streakMultiplier * (1 + slotStreak * 0.15);
-}
-
 function entryVisitDate(entry) {
   return entry?.lastVisited ? new Date(entry.lastVisited).toLocaleDateString("en-CA") : null;
 }
@@ -347,9 +187,9 @@ function recordFocusedVisit(entry, now = Date.now()) {
   entry.lastVisited = now;
 }
 
-function computeVaultPayout(entry, slot, now) {
-  const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry));
-  const daily = entry.dailyBonusClaimedDate === TODAY() || entry.insertedOnDate === TODAY() ? 0 : dailyFirstOpenBonus(entry, slot);
+function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0) {
+  const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry, undefined, cacheCoreLevel));
+  const daily = entry.dailyBonusClaimedDate === TODAY() || entry.insertedOnDate === TODAY() ? 0 : dailyFirstOpenBonus(entry, slot, cacheCoreLevel);
   return {
     vault: stored,
     daily,
@@ -364,6 +204,68 @@ function addEarnings(sync, entry, amount) {
   entry.lifetimeEarned = sciAdd(entry.lifetimeEarned, amount);
 }
 
+function welcomeBackEstimate(sync, local, from, to) {
+  const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (to - from) / 1000));
+  const estimate = {
+    focus: { ...SCI_ZERO },
+    background: { ...SCI_ZERO },
+    total: { ...SCI_ZERO },
+    seconds: Math.floor(elapsedSeconds),
+    generatedAt: to
+  };
+  if (elapsedSeconds <= 0) return estimate;
+  for (const slot of sync.slots) {
+    if (!slot.assignedDomain) continue;
+    const domain = slot.assignedDomain;
+    const entry = getDomainEntry(local, domain);
+    const presence = local.presence[domain];
+    if (!presence) continue;
+    const state = presence.state;
+    if (!["active", "background"].includes(state)) continue;
+    const rate = domainIncomeForState(entry, slot, presence, to, sync.cacheCoreLevel);
+    const amount = Number.isFinite(rate) ? rate * elapsedSeconds : 0;
+    if (amount <= 0) continue;
+    const bucket = state === "active" ? "focus" : "background";
+    estimate[bucket] = sciAdd(estimate[bucket], amount);
+    estimate.total = sciAdd(estimate.total, amount);
+  }
+  return estimate;
+}
+
+function updateWelcomeBack(sync, local, now = Date.now()) {
+  if (local.pendingWelcomeBack && sciCompare(local.pendingWelcomeBack.total, 0) > 0) {
+    local.lastPopupSeenAt = now;
+    if (local.lastPopupBalance) {
+      const actualTotal = sciSub(sync.balance, local.lastPopupBalance);
+      if (sciCompare(actualTotal, local.pendingWelcomeBack.total) > 0) {
+        local.pendingWelcomeBack.total = actualTotal;
+      }
+    }
+    return local.pendingWelcomeBack;
+  }
+  const lastSeen = Number(local.lastPopupSeenAt || 0);
+  const lastBalance = local.lastPopupBalance ? toSci(local.lastPopupBalance) : null;
+  local.lastPopupSeenAt = now;
+  if (!lastSeen || !lastBalance) {
+    local.lastPopupBalance = sync.balance;
+    return null;
+  }
+  const elapsedSeconds = (now - lastSeen) / 1000;
+  if (elapsedSeconds < WELCOME_BACK_MIN_SECONDS) {
+    local.lastPopupBalance = sync.balance;
+    return null;
+  }
+  const actualTotal = sciSub(sync.balance, lastBalance);
+  if (sciCompare(actualTotal, 0) <= 0) {
+    local.lastPopupBalance = sync.balance;
+    return null;
+  }
+  const estimate = welcomeBackEstimate(sync, local, lastSeen, now);
+  estimate.total = actualTotal;
+  local.pendingWelcomeBack = estimate;
+  return estimate;
+}
+
 function settleAccrual(sync, local, now = Date.now()) {
   const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (now - (local.lastAccrualAt || now)) / 1000));
   if (elapsedSeconds <= 0) {
@@ -374,11 +276,11 @@ function settleAccrual(sync, local, now = Date.now()) {
     if (!slot.assignedDomain) continue;
     const entry = getDomainEntry(local, slot.assignedDomain);
     const presence = local.presence[slot.assignedDomain];
-    const liveRate = domainIncomeForState(entry, slot, presence, now);
+    const liveRate = domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel);
     addEarnings(sync, entry, liveRate * elapsedSeconds);
-    const cap = vaultCap(entry);
+    const cap = vaultCap(entry, undefined, sync.cacheCoreLevel);
     const currentVault = sciToNumber(entry.vaultAmount);
-    const vaultGain = Math.min(cap - currentVault, vaultRate(entry) * elapsedSeconds);
+    const vaultGain = Math.min(cap - currentVault, vaultRate(entry, undefined, sync.cacheCoreLevel) * elapsedSeconds);
     if (vaultGain > 0) {
       entry.vaultAmount = sciAdd(entry.vaultAmount, vaultGain);
       entry.vaultLastTickTime = now;
@@ -414,7 +316,7 @@ async function rebuildPresence(sync, local) {
     else if (seen?.openCount > 0) state = "background";
     if (old?.state === "background" && state === "active" && slot) {
       const entry = getDomainEntry(local, domain);
-      addEarnings(sync, entry, domainBaseRate(entry) * 65 * Math.pow(getUpgradeLevel(entry, "wakeBonus"), 1.1) * slotTierBonus(slot));
+      addEarnings(sync, entry, wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel));
     }
     if (state === "active") recordFocusedVisit(getDomainEntry(local, domain), now);
     next[domain] = {
@@ -465,7 +367,7 @@ function currentSlotIncomes(sync, library, presence, now = Date.now()) {
   return sync.slots.reduce((incomes, slot) => {
     if (!slot.assignedDomain) return incomes;
     const domain = slot.assignedDomain;
-    incomes[domain] = domainIncomeForState(library[domain], slot, presence[domain], now);
+    incomes[domain] = domainIncomeForState(library[domain], slot, presence[domain], now, sync.cacheCoreLevel);
     return incomes;
   }, {});
 }
@@ -475,6 +377,8 @@ async function getSnapshot() {
   const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const currentDomain = normalizeDomainFromUrl(activeTab?.url);
   const now = Date.now();
+  const welcomeBack = updateWelcomeBack(sync, local, now);
+  await saveState(sync, local);
   const slotIncomes = currentSlotIncomes(sync, local.domainLibrary, local.presence, now);
   return {
     sync,
@@ -482,8 +386,15 @@ async function getSnapshot() {
     upgradeDefs: UPGRADE_DEFS,
     slotTiers: SLOT_TIERS,
     slotPrestigeCostScale: SLOT_PRESTIGE_COST_SCALE,
+    cacheCore: {
+      level: sync.cacheCoreLevel,
+      multiplier: cacheCoreMultiplier(sync.cacheCoreLevel),
+      nextMultiplier: cacheCoreMultiplier(sync.cacheCoreLevel + 1),
+      nextCost: cacheCoreCost(sync.cacheCoreLevel)
+    },
     now,
     slotIncomes,
+    welcomeBack,
     incomePerSecond: Object.values(slotIncomes).reduce((sum, value) => sum + value, 0),
     nextSlotCost: slotUnlockCost(sync.unlockedSlots + 1),
     today: TODAY(),
@@ -493,6 +404,16 @@ async function getSnapshot() {
       reason: currentDomain ? "" : "Open a normal http or https page first."
     }
   };
+}
+
+async function collectWelcomeBack() {
+  const { sync, local } = await getState();
+  const award = local.pendingWelcomeBack;
+  local.pendingWelcomeBack = null;
+  local.lastPopupSeenAt = Date.now();
+  local.lastPopupBalance = sync.balance;
+  await saveState(sync, local);
+  return { ok: true, award };
 }
 
 function buyUpgrade(sync, local, domain, upgradeId, mode) {
@@ -595,7 +516,7 @@ async function claimRevisit(domain) {
   const slot = sync.slots.find((item) => item.assignedDomain === domain);
   if (!slot) return { ok: false, error: "Domain is not slotted." };
   const entry = getDomainEntry(local, domain);
-  const payout = computeVaultPayout(entry, slot, Date.now());
+  const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel);
   if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
   entry.dailyBonusClaimedDate = TODAY();
   entry.vaultAmount = { ...SCI_ZERO };
@@ -627,6 +548,21 @@ async function upgradeSlotTier(slotId) {
   slot.tier += 1;
   await saveState(sync, local);
   return { ok: true };
+}
+
+async function upgradeCacheCore() {
+  const { sync, local } = await settleAndSave();
+  const cost = cacheCoreCost(sync.cacheCoreLevel);
+  if (sync.cachePoints < cost) return { ok: false, error: "Not enough CP." };
+  sync.cachePoints -= cost;
+  sync.cacheCoreLevel += 1;
+  await saveState(sync, local);
+  return {
+    ok: true,
+    level: sync.cacheCoreLevel,
+    cost,
+    multiplier: cacheCoreMultiplier(sync.cacheCoreLevel)
+  };
 }
 
 async function clearCachePrestige() {
@@ -699,7 +635,7 @@ async function navigationBonus(details) {
     await saveState(sync, local);
     return;
   }
-  const amount = dailyFirstOpenBonus(entry, slot) * 0.13 * (1 + 0.18 * level);
+  const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel);
   local.lastNavigationBonusAt[domain] = now;
   addEarnings(sync, entry, amount);
   await saveState(sync, local);
@@ -739,8 +675,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return result;
       }
       if (message.type === "claimRevisit") return claimRevisit(message.domain);
+      if (message.type === "collectWelcomeBack") return collectWelcomeBack();
       if (message.type === "unlockSlot") return unlockNextSlot();
       if (message.type === "upgradeSlotTier") return upgradeSlotTier(message.slotId);
+      if (message.type === "upgradeCacheCore") return upgradeCacheCore();
       if (message.type === "prestige") return clearCachePrestige();
       if (message.type === "devAddCash") return devAddCash(message.amount);
       if (message.type === "devAddCachePoints") return devAddCachePoints(message.amount);
