@@ -2,6 +2,8 @@ const app = document.getElementById("app");
 let snapshot = null;
 let route = { name: "home" };
 let buyMode = "1";
+let detailTab = "dashboard";
+let detailUpgradeTab = "active";
 let toast = "";
 let toastType = "success";
 let search = "";
@@ -99,7 +101,7 @@ function patchDynamicFields() {
   if (!snapshot) return;
   setText("balance", money(liveBalance()));
   setText("income", `+${money(liveIncomePerSecond)}/sec`);
-  setText("cacheCredits", String(Math.floor(snapshot.sync.cacheCredits)));
+  setText("cacheCredits", cc(snapshot.sync.cacheCredits));
   setText("cacheCoreLevel", String(cacheCoreLevel()));
   patchSlots();
   patchDetail();
@@ -155,7 +157,8 @@ function patchSlots() {
     if (streakNode) streakNode.className = `slot-streak ${streakDoneToday(entry) ? "active" : "inactive"}`;
     const readyNode = app.querySelector(`[data-field="slot:${domain}:ready"]`);
     if (readyNode) {
-      const vaultReady = sciCompare(entry?.vaultAmount || 0, 0) > 0;
+      const cap = vaultCap(entry);
+      const vaultReady = sciCompare(entry?.vaultAmount || 0, cap) >= 0;
       readyNode.hidden = !vaultReady;
     }
   }
@@ -222,6 +225,19 @@ function money(value) {
     return `$${amount.toFixed(suffix === 0 ? 2 : 2)}${suffixes[suffix]}`;
   }
   return `$${sci.m.toFixed(2)}e${sci.e}`;
+}
+
+function cc(value) {
+  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+  const sci = toSci(value);
+  if (sci.m === 0) return "0";
+  if (sci.e < 3) return sciToNumber(sci).toFixed(sci.e < 1 ? 1 : 0);
+  const suffix = Math.floor(sci.e / 3);
+  if (suffix >= 0 && suffix < suffixes.length) {
+    const amount = sci.m * Math.pow(10, sci.e - suffix * 3);
+    return `${amount.toFixed(2)}${suffixes[suffix]}`;
+  }
+  return `${sci.m.toFixed(2)}e${sci.e}`;
 }
 
 function dateAgo(value) {
@@ -423,6 +439,7 @@ function shell(content, activeNav = "slots") {
     });
   }
   patchDynamicFields();
+  initUpgradeTooltips();
 }
 
 function renderModal() {
@@ -433,6 +450,8 @@ function renderModal() {
   if (modal?.name === "domainDetails") return renderDomainDetailsModal(modal.domain, modal.source);
   if (modal?.name === "cacheCore") return renderCacheCoreModal();
   if (modal?.name === "confirm") return renderConfirmModal();
+  if (modal?.name === "domainManage") return renderDomainManageModal(modal.slotId);
+  if (modal?.name === "devInput") return renderDevInputModal();
   if (modal !== "prestige") return "";
   const award = prestigeAwardEstimate();
   return `
@@ -443,7 +462,7 @@ function renderModal() {
         <p>Reset cash, upgrades, vaults, and streaks. Slot prestige tiers stay, and tiered slots remain permanently unlocked.</p>
         <div class="modal-reward">
           <span>CACHE CREDITS</span>
-          <strong>+${award} CC</strong>
+          <strong>+${cc(award)} CC</strong>
         </div>
         <div class="modal-actions">
           <button class="btn" data-action="cancelModal">CANCEL</button>
@@ -475,7 +494,7 @@ function renderCacheCoreModal() {
           </div>
           <div class="detail-stat-row">
             <span>NEXT COST</span>
-            <strong>${cost} CC</strong>
+            <strong>${cc(cost)} CC</strong>
           </div>
         </div>
         <div class="modal-actions">
@@ -517,7 +536,7 @@ function renderSlotUpgradeOption(slot) {
       <div class="slot-upgrade-bg">${slot.assignedDomain || "EMPTY SLOT"}</div>
       <div class="slot-upgrade-top">
         <span>SLOT ${slot.id}</span>
-        <strong>${disabled ? "MAX" : `${cost} CC`}</strong>
+        <strong>${disabled ? "MAX" : `${cc(cost)} CC`}</strong>
       </div>
       <div class="slot-upgrade-tier">TIER ${tierName(slot.tier)}</div>
     </button>
@@ -547,7 +566,7 @@ function renderSlotUpgradeDetailModal(slotId) {
           </div>
           <div class="detail-stat-row">
             <span>COST</span>
-            <strong>${nextTier ? `${cost} CC` : "MAX"}</strong>
+            <strong>${nextTier ? `${cc(cost)} CC` : "MAX"}</strong>
           </div>
         </div>
         <div class="modal-actions">
@@ -640,6 +659,50 @@ function renderWelcomeBackModal() {
         </div>
         <div class="modal-actions single">
           <button class="btn btn-collect" data-action="collectWelcomeBack">COLLECT</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderDomainManageModal(slotId) {
+  const slot = snapshot.sync.slots.find((item) => item.id === Number(slotId));
+  if (!slot) return "";
+  const nextTier = nextSlotTier(slot);
+  const nextTierCost = nextTier ? slotTierCost(slot, nextTier) : null;
+  const affordable = nextTier && snapshot.sync.cacheCredits >= nextTierCost;
+
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
+        <div class="modal-kicker">SLOT ${slot.id}</div>
+        <h2 id="manageTitle">MANAGE DOMAIN</h2>
+        <div style="margin-bottom: 15px;">
+          <button class="btn btn-prestige" data-action="tier" data-slot="${slot.id}" style="width:100%; margin-bottom:10px;" ${nextTier && affordable ? "" : "disabled"}>${nextTier ? `UPGRADE TO ${tierMaterial(nextTier.tier)} (${cc(nextTierCost)} CC)` : "SLOT MAXED"}</button>
+          <button class="btn" data-action="picker" data-slot="${slot.id}" style="width:100%; margin-bottom:10px;">SWAP DOMAIN</button>
+          <button class="btn btn-danger" data-action="remove" data-slot="${slot.id}" style="width:100%;">REMOVE FROM SLOT</button>
+        </div>
+        <div class="modal-actions single">
+          <button class="btn" data-action="cancelModal">CLOSE</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderDevInputModal() {
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="devInputTitle">
+        <div class="modal-kicker">DEV TOOLS</div>
+        <h2 id="devInputTitle">${modal.title}</h2>
+        <p>${modal.body}</p>
+        <div style="margin: 12px 0;">
+          <input class="input-text" data-dev-input type="number" placeholder="Enter amount" style="width: 100%; text-align: center;">
+        </div>
+        <div class="modal-actions">
+          <button class="btn" data-action="cancelModal">CANCEL</button>
+          <button class="btn btn-prestige" data-action="devInputConfirm">ADD</button>
         </div>
       </section>
     </div>
@@ -832,7 +895,7 @@ function renderHeader() {
       <div class="header-actions">
         <button class="btn btn-reset-cache" data-action="prestige">RESET</button>
         <button class="prestige-currency" data-action="cacheCore" aria-label="Cache Credits and permanent upgrades">
-          CC: <strong data-field="cacheCredits">${Math.floor(snapshot.sync.cacheCredits)}</strong>
+          CC: <strong data-field="cacheCredits">${cc(snapshot.sync.cacheCredits)}</strong>
         </button>
       </div>
     </header>
@@ -855,6 +918,13 @@ function renderStore() {
       <div class="upgrade-section-label">CACHE SHOP</div>
       ${renderCacheCoreStoreItem()}
       ${renderSlotUpgradeStoreItem()}
+      <div class="upgrade-section-label" style="margin-top:20px;">DEV TOOLS</div>
+      <div class="dev-controls">
+        <button class="btn" data-action="devCustomCash">DEV +$</button>
+        <button class="btn btn-prestige" data-action="devCustomCC">DEV +CC</button>
+        <button class="btn btn-danger" data-action="devReset">DEV RESET $/CC</button>
+        <button class="btn btn-danger" data-action="devResetLifetime">DEV RESET LIFETIME</button>
+      </div>
     </main>
   `, "store");
 }
@@ -877,7 +947,7 @@ function renderCacheCoreStoreItem() {
       </div>
       <button class="btn btn-buy" data-action="upgradeCacheCore" ${affordable ? "" : "disabled"}>
         <span>BUY</span>
-        <span style="font-size:12px">${cost} CC</span>
+        <span style="font-size:12px">${cc(cost)} CC</span>
       </button>
     </div>
   `;
@@ -910,8 +980,7 @@ function renderHome() {
   if (!snapshot.sync.onboardingComplete) return renderOnboarding();
   shell(`
     <main class="view active">
-      <div class="slots-header">ACTIVE SLOTS</div>
-      ${renderDevButtons()}
+      <div class="slots-header">DOMAIN SLOTS</div>
       <div class="slots-grid">
         ${snapshot.sync.slots.map(renderSlot).join("")}
       </div>
@@ -920,15 +989,7 @@ function renderHome() {
   `, "slots");
 }
 
-function renderDevButtons() {
-  return `
-    <div class="dev-controls">
-      <button class="btn" data-action="devCash">DEV +$10K</button>
-      <button class="btn btn-prestige" data-action="devPrestige">DEV +10 CC</button>
-      <button class="btn btn-danger" data-action="devReset">DEV RESET $/CC</button>
-    </div>
-  `;
-}
+
 
 function renderSlot(slot) {
   if (!slot.assignedDomain) {
@@ -937,7 +998,7 @@ function renderSlot(slot) {
   const domain = slot.assignedDomain;
   const entry = entryFor(domain);
   const state = stateLabel(domain);
-  const vaultReady = sciCompare(entry?.vaultAmount || 0, 0) > 0;
+  const vaultReady = sciCompare(entry?.vaultAmount || 0, vaultCap(entry)) >= 0;
   return `
     <button class="slot ${tierClass(slot.tier)}" data-action="detail" data-domain="${domain}">
       <div class="slot-info">
@@ -994,8 +1055,50 @@ function renderDetail(domain) {
   }
   if (!BUY_MODES.includes(buyMode)) buyMode = "1";
   const state = stateLabel(domain);
-  const nextTier = nextSlotTier(slot);
-  const nextTierCost = nextTier ? slotTierCost(slot, nextTier) : null;
+
+  const isDashboard = detailTab === "dashboard";
+  const isUpgrades = detailTab === "upgrades";
+
+  let content = "";
+  if (isDashboard) {
+    content = `
+      <div class="vault-panel domain-status-panel">
+        <div class="vault-info">
+          <div>
+            <span data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span>
+            <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(currentRateTooltip(domain, entry, slot))}">?</span>
+          </div>
+          <small>BASE INCOME: <span data-field="detailBaseIncome">${money(domainBaseRate(entry))}/sec</span></small>
+          <small>SLOT MULTIPLIER: <span data-field="detailSlotMultiplier">x${tierBonus(slot).toFixed(2)}</span></small>
+          <small>STREAK: <span data-field="detailStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
+        </div>
+        <button class="btn btn-detail" data-action="domainDetails" data-domain="${domain}">DETAILS</button>
+      </div>
+      <div class="vault-panel">
+        <div class="vault-info">
+          <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
+          <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span></small>
+        </div>
+        <button class="btn btn-collect" data-action="claim" data-domain="${domain}" ${sciCompare(entry.vaultAmount, 0) > 0 ? "" : "disabled"}>COLLECT</button>
+      </div>
+    `;
+  } else {
+    content = `
+      <div class="upgrade-toolbar" style="display:flex; align-items:stretch; gap:10px; margin-bottom:10px;">
+        <div class="upgrade-tabs" style="display:flex; gap:4px; flex:1;">
+          <button class="btn ${detailUpgradeTab === "active" ? "active" : ""}" data-action="detailUpgradeTab" data-tab="active" style="flex:1; padding:6px 0; font-size:14px;">ACTIVE</button>
+          <button class="btn ${detailUpgradeTab === "vault" ? "active" : ""}" data-action="detailUpgradeTab" data-tab="vault" style="flex:1; padding:6px 0; font-size:14px;">VAULT</button>
+          <button class="btn ${detailUpgradeTab === "background" ? "active" : ""}" data-action="detailUpgradeTab" data-tab="background" style="flex:1; padding:6px 0; font-size:14px;">BACKGROUND</button>
+        </div>
+        <div style="width:1px; background:var(--primary); opacity:0.3; margin:4px 0;"></div>
+        <button class="btn" data-action="mode" data-mode="${buyMode === "1" ? "10" : "1"}" style="padding:6px; font-size:14px; min-width:64px; flex-shrink:0;">BUY ${buyMode}</button>
+      </div>
+      <div class="upgrade-list">
+        ${renderUpgradeGroups(entry)}
+      </div>
+    `;
+  }
+
   shell(`
     <main class="view active">
       <div class="view-header">
@@ -1011,45 +1114,25 @@ function renderDetail(domain) {
             </svg>
           </button>
         </div>
-        <button class="btn btn-detail" data-action="domainDetails" data-domain="${domain}">DETAILS</button>
+        <button class="btn btn-icon" data-action="domainManage" data-slot="${slot.id}" aria-label="Manage Domain">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+            <circle cx="12" cy="5" r="2"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+            <circle cx="12" cy="19" r="2"></circle>
+          </svg>
+        </button>
       </div>
-      <div class="vault-panel domain-status-panel">
-        <div class="vault-info">
-          <div>
-            <span data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span>
-            <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(currentRateTooltip(domain, entry, slot))}">?</span>
-          </div>
-          <small>BASE INCOME: <span data-field="detailBaseIncome">${money(domainBaseRate(entry))}/sec</span></small>
-          <small>SLOT MULTIPLIER: <span data-field="detailSlotMultiplier">x${tierBonus(slot).toFixed(2)}</span></small>
-          <small>STREAK: <span data-field="detailStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
-        </div>
+      <div class="detail-tabs" style="display:flex; gap:10px; margin-bottom:10px;">
+        <button class="btn ${isDashboard ? "active" : ""}" style="flex:1;" data-action="detailTab" data-tab="dashboard">DASHBOARD</button>
+        <button class="btn ${isUpgrades ? "active" : ""}" style="flex:1;" data-action="detailTab" data-tab="upgrades">UPGRADES</button>
       </div>
-      <div class="vault-panel">
-        <div class="vault-info">
-          <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
-          <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span></small>
-        </div>
-        <button class="btn btn-collect" data-action="claim" data-domain="${domain}" ${sciCompare(entry.vaultAmount, 0) > 0 ? "" : "disabled"}>COLLECT</button>
-      </div>
-      <div class="upgrade-toolbar">
-        ${BUY_MODES.map((mode) => `<button class="btn ${buyMode === mode ? "active" : ""}" data-action="mode" data-mode="${mode}">BUY ${mode}</button>`).join("")}
-      </div>
-      <div class="upgrade-list">
-        ${renderUpgradeGroups(entry)}
-      </div>
-      <button class="btn btn-prestige" data-action="tier" data-slot="${slot.id}" style="width:100%; margin-top:10px;" ${nextTier && snapshot.sync.cacheCredits >= nextTierCost ? "" : "disabled"}>${nextTier ? `UPGRADE TO ${tierMaterial(nextTier.tier)} (${nextTierCost} CC)` : "SLOT MAXED"}</button>
-      <button class="btn" data-action="picker" data-slot="${slot.id}" style="width:100%; margin-top:10px;">SWAP DOMAIN</button>
-      <button class="btn btn-danger" data-action="remove" data-slot="${slot.id}">REMOVE FROM SLOT</button>
+      ${content}
     </main>
   `, "slots");
 }
 
 function renderUpgradeGroups(entry) {
-  const labels = { active: "ACTIVE INCOME", vault: "VAULT STORAGE", background: "BACKGROUND BEHAVIOR" };
-  return Object.keys(labels).map((category) => `
-    <div class="upgrade-section-label">${labels[category]}</div>
-    ${snapshot.upgradeDefs.filter((def) => def.category === category).map((def) => renderUpgrade(entry, def)).join("")}
-  `).join("");
+  return snapshot.upgradeDefs.filter((def) => def.category === detailUpgradeTab).map((def) => renderUpgrade(entry, def)).join("");
 }
 
 function renderUpgrade(entry, def) {
@@ -1137,7 +1220,7 @@ function upgradeTooltip(id, level) {
       "Idle Depth increases background income the longer the domain stays open in the background, reaching max boost after 25 minutes."
     ],
     wakeBonus: [
-      "Wake Bonus pays a burst when this domain returns from background to focused. It has a 1 minute cooldown per domain and still requires a background-to-focused transition."
+      "Wake Bonus pays a burst when this domain returns from background to focused. 1 minute cooldown per domain."
     ]
   };
   return (lines[id] || [effectSummary(id, level)]).join("\n");
@@ -1252,10 +1335,13 @@ async function handleAction(event) {
 
   if (action === "home") route = { name: "home" };
   if (action === "detail") route = { name: "detail", domain: node.dataset.domain };
+  if (action === "detailTab") detailTab = node.dataset.tab;
+  if (action === "detailUpgradeTab") detailUpgradeTab = node.dataset.tab;
+  if (action === "domainManage") modal = { name: "domainManage", slotId: Number(node.dataset.slot) };
   if (action === "library") route = { name: "library" };
   if (action === "store") route = { name: "store" };
   if (action === "domainSummary") route = { name: "domainSummary", domain: node.dataset.domain };
-  if (action === "picker") route = { name: "picker", slotId: Number(node.dataset.slot) };
+  if (action === "picker") { route = { name: "picker", slotId: Number(node.dataset.slot) }; modal = null; }
   if (action === "mode" && BUY_MODES.includes(node.dataset.mode)) buyMode = node.dataset.mode;
   if (action === "openDomain") await chrome.tabs.create({ url: `https://${node.dataset.domain}` });
   if (action === "finishOnboarding") await act("completeOnboarding");
@@ -1307,8 +1393,19 @@ async function handleAction(event) {
   if (action === "claim") await act("claimRevisit", { domain: node.dataset.domain });
   if (action === "unlock") await act("unlockSlot");
   if (action === "tier") await act("upgradeSlotTier", { slotId: Number(node.dataset.slot) });
-  if (action === "devCash") await act("devAddCash", { amount: 10000 });
-  if (action === "devPrestige") await act("devAddCachePoints", { amount: 10 });
+  if (action === "devCustomCash") modal = { name: "devInput", title: "ADD CASH", body: "Enter a custom dollar amount to add.", actionType: "devAddCash" };
+  if (action === "devCustomCC") modal = { name: "devInput", title: "ADD CACHE CREDITS", body: "Enter a custom CC amount to add.", actionType: "devAddCachePoints" };
+  if (action === "devInputConfirm" && modal?.name === "devInput") {
+    const input = app.querySelector("[data-dev-input]");
+    const amount = Number(input?.value || 0);
+    if (amount > 0) {
+      const pending = modal;
+      modal = null;
+      await act(pending.actionType, { amount });
+    } else {
+      showToast("Enter a positive number.", "warning");
+    }
+  }
   if (action === "devReset") {
     modal = {
       name: "confirm",
@@ -1318,6 +1415,17 @@ async function handleAction(event) {
       body: "This resets only current cash and Cache Credits. Domain history and slots stay intact.",
       confirmLabel: "RESET",
       actionType: "devResetCashAndCachePoints"
+    };
+  }
+  if (action === "devResetLifetime") {
+    modal = {
+      name: "confirm",
+      variant: "danger",
+      kicker: "DEV RESET",
+      title: "RESET LIFETIME EARNINGS?",
+      body: "This zeroes out total lifetime earned and all per-domain lifetime stats. CC already claimed from lifetime is also reset.",
+      confirmLabel: "RESET",
+      actionType: "devResetLifetime"
     };
   }
   if (action === "remove") {
@@ -1397,7 +1505,7 @@ function routeToAssignedDomain(slotId) {
 async function act(type, payload = {}) {
   const result = await send(type, payload);
   if (!result?.ok) showToast(result?.error || "Action failed.", "warning");
-  else if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${result.award} CC.`);
+  else if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${cc(result.award)} CC.`);
   else if (type === "upgradeCacheCore") showToast(`CACHE CORE LEVEL ${result.level}.`);
   else showToast("SUCCESS");
   snapshot = await send("snapshot");
@@ -1422,3 +1530,64 @@ function routeKey() {
 refresh({ full: true });
 startLiveTicker();
 setInterval(() => refresh({ full: false }), 5000);
+
+// --- Tooltip system ---
+let tooltipEl = null;
+let tooltipHoverTimer = null;
+
+function initUpgradeTooltips() {
+  if (!tooltipEl) {
+    tooltipEl = document.createElement("div");
+    tooltipEl.className = "upgrade-tooltip";
+    document.body.appendChild(tooltipEl);
+  }
+  hideTooltip();
+
+  app.querySelectorAll(".upgrade-details[data-tooltip]").forEach((node) => {
+    node.addEventListener("mouseenter", onTooltipEnter);
+    node.addEventListener("mouseleave", onTooltipLeave);
+  });
+}
+
+function onTooltipEnter(event) {
+  const target = event.currentTarget;
+  const text = target.getAttribute("data-tooltip");
+  if (!text) return;
+  clearTimeout(tooltipHoverTimer);
+  tooltipHoverTimer = setTimeout(() => showUpgradeTooltip(target, text), 450);
+}
+
+function onTooltipLeave() {
+  clearTimeout(tooltipHoverTimer);
+  hideTooltip();
+}
+
+function showUpgradeTooltip(anchor, text) {
+  tooltipEl.textContent = text;
+  tooltipEl.style.left = "0";
+  tooltipEl.style.top = "0";
+  tooltipEl.classList.add("visible");
+
+  const rect = anchor.getBoundingClientRect();
+  const tipRect = tooltipEl.getBoundingClientRect();
+  const viewportH = window.innerHeight;
+
+  let top = rect.bottom + 6;
+  if (top + tipRect.height > viewportH - 4) {
+    top = rect.top - tipRect.height - 6;
+  }
+  let left = rect.left;
+  if (left + tipRect.width > window.innerWidth - 4) {
+    left = window.innerWidth - tipRect.width - 4;
+  }
+  if (left < 4) left = 4;
+
+  tooltipEl.style.left = `${left}px`;
+  tooltipEl.style.top = `${top}px`;
+}
+
+function hideTooltip() {
+  if (tooltipEl) {
+    tooltipEl.classList.remove("visible");
+  }
+}

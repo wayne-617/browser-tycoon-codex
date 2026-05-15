@@ -759,6 +759,17 @@ async function devResetCashAndCachePoints() {
   return { ok: true };
 }
 
+async function devResetLifetime() {
+  const { sync, local } = await settleAndSave();
+  sync.totalLifetimeEarned = { ...SCI_ZERO };
+  sync.ccAlreadyClaimedFromLifetime = 0;
+  for (const entry of Object.values(local.domainLibrary)) {
+    entry.lifetimeEarned = { ...SCI_ZERO };
+  }
+  await saveState(sync, local);
+  return { ok: true };
+}
+
 async function navigationBonus(details) {
   if (details.frameId !== 0) return;
   const domain = normalizeDomainFromUrl(details.url);
@@ -841,6 +852,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "devAddCash") return devAddCash(message.amount);
       if (message.type === "devAddCachePoints") return devAddCachePoints(message.amount);
       if (message.type === "devResetCashAndCachePoints") return devResetCashAndCachePoints();
+      if (message.type === "devResetLifetime") return devResetLifetime();
       if (message.type === "completeOnboarding") {
         const { sync, local } = await getState();
         sync.onboardingComplete = true;
