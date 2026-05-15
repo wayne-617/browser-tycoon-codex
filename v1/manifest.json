@@ -21,9 +21,9 @@
     "https://*/*"
   ],
   "icons": {
-    "16": "icons/Icon14_01.png",
-    "32": "icons/Icon14_02.png",
-    "48": "icons/Icon14_03.png",
-    "128": "icons/Icon14_04.png"
+    "16": "icons/Icon14_40.png",
+    "32": "icons/Icon14_40.png",
+    "48": "icons/Icon14_40.png",
+    "128": "icons/Icon14_40.png"
   }
 }

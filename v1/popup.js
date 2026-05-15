@@ -16,6 +16,7 @@ let collectBurst = null;
 let collectBurstTimer = null;
 
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
+const BUY_MODES = ["1", "10"];
 const {
   BASE_RATE,
   TRAFFIC_ENGINE_MULTIPLIER,
@@ -98,7 +99,7 @@ function patchDynamicFields() {
   if (!snapshot) return;
   setText("balance", money(liveBalance()));
   setText("income", `+${money(liveIncomePerSecond)}/sec`);
-  setText("cachePoints", String(Math.floor(snapshot.sync.cachePoints)));
+  setText("cacheCredits", String(Math.floor(snapshot.sync.cacheCredits)));
   setText("cacheCoreLevel", String(cacheCoreLevel()));
   patchSlots();
   patchDetail();
@@ -129,7 +130,7 @@ function patchLibraryList() {
   const list = app.querySelector("[data-library-list]");
   if (!list) return;
   const pickSlotId = route.name === "picker" ? route.slotId : null;
-  const domains = filteredLibraryDomains();
+  const domains = filteredLibraryDomains(pickSlotId);
   list.innerHTML = domains.length
     ? domains.map((entry) => renderLibraryItem(entry, pickSlotId)).join("")
     : `<div class="library-item">NO DOMAINS IN LIBRARY YET</div>`;
@@ -154,7 +155,7 @@ function patchSlots() {
     if (streakNode) streakNode.className = `slot-streak ${streakDoneToday(entry) ? "active" : "inactive"}`;
     const readyNode = app.querySelector(`[data-field="slot:${domain}:ready"]`);
     if (readyNode) {
-      const vaultReady = sciCompare(entry?.vaultAmount || 0, 0) > 0 || (entry?.dailyBonusClaimedDate !== snapshot.today && entry?.insertedOnDate !== snapshot.today);
+      const vaultReady = sciCompare(entry?.vaultAmount || 0, 0) > 0;
       readyNode.hidden = !vaultReady;
     }
   }
@@ -171,10 +172,11 @@ function patchDetail() {
   setText("detailVaultRate", `${money(vaultRate(entry))}/sec`);
   setText("detailState", state.text);
   setText("detailIncome", `${money(incomeFor(domain))}/sec`);
-  setText("detailStreak", String(entry.currentStreak));
+  setText("detailBaseIncome", `${money(domainBaseRate(entry))}/sec`);
+  setText("detailSlotMultiplier", `x${tierBonus(currentSlot(domain)).toFixed(2)}`);
+  setText("detailStreak", String(displayStreak(entry)));
   setText("detailLastVisit", dateAgo(entry.lastVisited));
-  setText("detailCurrentIncome", `${money(incomeFor(domain))}/sec`);
-  setDisabled(`[data-action="claim"][data-domain="${CSS.escape(domain)}"]`, sciCompare(entry.vaultAmount, 0) <= 0 && entry.dailyBonusClaimedDate === snapshot.today);
+  setDisabled(`[data-action="claim"][data-domain="${CSS.escape(domain)}"]`, sciCompare(entry.vaultAmount, 0) <= 0);
 }
 
 function patchLibrarySummary() {
@@ -184,7 +186,7 @@ function patchLibrarySummary() {
   setText("summaryStatus", entry.isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY");
   setText("summaryLifetime", money(entry.lifetimeEarned));
   setText("summaryVault", money(entry.vaultAmount));
-  setText("summaryStreak", String(entry.currentStreak));
+  setText("summaryStreak", String(displayStreak(entry)));
   setText("summaryLastVisit", dateAgo(entry.lastVisited));
 }
 
@@ -194,10 +196,10 @@ function patchAffordability(displayBalance = snapshot?.sync?.balance || 0) {
   app.querySelectorAll("[data-action='tier'][data-slot]").forEach((button) => {
     const slot = snapshot.sync.slots.find((item) => item.id === Number(button.dataset.slot));
     const nextTier = slot ? nextSlotTier(slot) : null;
-    button.disabled = !nextTier || snapshot.sync.cachePoints < slotTierCost(slot, nextTier);
+    button.disabled = !nextTier || snapshot.sync.cacheCredits < slotTierCost(slot, nextTier);
   });
   app.querySelectorAll("[data-action='upgradeCacheCore']").forEach((button) => {
-    button.disabled = snapshot.sync.cachePoints < cacheCoreCost(cacheCoreLevel());
+    button.disabled = snapshot.sync.cacheCredits < cacheCoreCost(cacheCoreLevel());
   });
   app.querySelectorAll("[data-action='buy'][data-upgrade][data-domain]").forEach((button) => {
     const entry = entryFor(button.dataset.domain);
@@ -205,7 +207,7 @@ function patchAffordability(displayBalance = snapshot?.sync?.balance || 0) {
     if (!entry || !def) return;
     const level = upgradeLevel(entry, def.id);
     const maxed = def.maxLevel !== null && level >= def.maxLevel;
-    button.disabled = maxed || sciCompare(balance, upgradeCost(def, level)) < 0;
+    button.disabled = maxed || sciCompare(balance, upgradeBulkCost(def, level, selectedBuyQuantity())) < 0;
   });
 }
 
@@ -264,8 +266,31 @@ function slotTierCost(slot, tier) {
   return mathSlotTierCost(slot?.id, tier);
 }
 
+function selectedBuyQuantity() {
+  return buyMode === "10" ? 10 : 1;
+}
+
+function upgradeBulkCost(def, level, quantity = selectedBuyQuantity()) {
+  let total = 0;
+  for (let offset = 0; offset < quantity; offset += 1) {
+    const nextLevel = level + offset;
+    if (def.maxLevel !== null && nextLevel >= def.maxLevel) break;
+    total += upgradeCost(def, nextLevel);
+  }
+  return total;
+}
+
+function upgradeTargetLevel(def, level, quantity = selectedBuyQuantity()) {
+  if (def.maxLevel === null) return level + quantity;
+  return Math.min(def.maxLevel, level + quantity);
+}
+
 function cacheCoreLevel() {
   return Number(snapshot?.sync?.cacheCoreLevel || 0);
+}
+
+function cacheCoreBaseRate(level = cacheCoreLevel()) {
+  return BASE_RATE * cacheCoreMultiplier(level);
 }
 
 function domainBaseRate(entry) {
@@ -346,6 +371,24 @@ function stateLabel(domain) {
   return { text: "[INACTIVE]", className: "closed" };
 }
 
+function currentRateTooltip(domain, entry, slot) {
+  const presence = snapshot.local.presence[domain];
+  const base = money(domainBaseRate(entry));
+  const tab = tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2);
+  const tier = tierBonus(slot).toFixed(2);
+  if (presence?.state === "active") {
+    const focus = focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2);
+    return `Focused rate = base income (${base}/sec) x tab multiplier (${tab}) x focus bonus (${focus}) x slot multiplier (${tier}).`;
+  }
+  if (presence?.state === "background") {
+    const hum = (0.08 * upgradeLevel(entry, "backgroundHum")).toFixed(2);
+    const idleSeconds = Math.max(0, (Date.now() - (presence.backgroundSince || Date.now())) / 1000);
+    const idle = (1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5)).toFixed(2);
+    return `Background rate = base income (${base}/sec) x tab multiplier (${tab}) x background hum (${hum}) x idle depth (currently ${idle}) x slot multiplier (${tier}).`;
+  }
+  return "Inactive: this domain is not currently open as a focused or background tab, so its current rate is $0.00/sec.";
+}
+
 function favicon(domain, className = "slot-icon") {
   return `<img class="${className}" src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64" alt="" onerror="this.src='${iconPath(1)}'">`;
 }
@@ -384,7 +427,10 @@ function shell(content, activeNav = "slots") {
 
 function renderModal() {
   if (modal?.name === "welcomeBack") return renderWelcomeBackModal();
-  if (modal?.name === "domainDetails") return renderDomainDetailsModal(modal.domain);
+  if (modal?.name === "slotUpgradeList") return renderSlotUpgradeListModal();
+  if (modal?.name === "slotUpgradeDetail") return renderSlotUpgradeDetailModal(modal.slotId);
+  if (modal?.name === "swapDomain") return renderSwapDomainModal();
+  if (modal?.name === "domainDetails") return renderDomainDetailsModal(modal.domain, modal.source);
   if (modal?.name === "cacheCore") return renderCacheCoreModal();
   if (modal?.name === "confirm") return renderConfirmModal();
   if (modal !== "prestige") return "";
@@ -396,8 +442,8 @@ function renderModal() {
         <h2 id="prestigeTitle">CLEAR CACHE?</h2>
         <p>Reset cash, upgrades, vaults, and streaks. Slot prestige tiers stay, and tiered slots remain permanently unlocked.</p>
         <div class="modal-reward">
-          <span>CACHE POINTS</span>
-          <strong>+${award} CP</strong>
+          <span>CACHE CREDITS</span>
+          <strong>+${award} CC</strong>
         </div>
         <div class="modal-actions">
           <button class="btn" data-action="cancelModal">CANCEL</button>
@@ -411,18 +457,16 @@ function renderModal() {
 function renderCacheCoreModal() {
   const level = cacheCoreLevel();
   const cost = cacheCoreCost(level);
-  const current = cacheCoreMultiplier(level);
-  const next = cacheCoreMultiplier(level + 1);
-  const affordable = snapshot.sync.cachePoints >= cost;
+  const affordable = snapshot.sync.cacheCredits >= cost;
   return `
     <div class="modal-scrim" role="presentation">
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="cacheCoreTitle">
         <div class="modal-kicker">PERMANENT UPGRADE</div>
         <h2 id="cacheCoreTitle">CACHE CORE</h2>
-        <p>Increase the global base domain rate for every domain and slot. Cache Core persists through Clear Cache resets.</p>
+        <p>${cacheCoreTooltip()}</p>
         <div class="modal-reward">
           <span>GLOBAL BASE RATE</span>
-          <strong>x${current.toFixed(2)} -> x${next.toFixed(2)}</strong>
+          <strong>${money(cacheCoreBaseRate(level))}/sec -> ${money(cacheCoreBaseRate(level + 1))}/sec</strong>
         </div>
         <div class="detail-stat-section">
           <div class="detail-stat-row">
@@ -431,7 +475,7 @@ function renderCacheCoreModal() {
           </div>
           <div class="detail-stat-row">
             <span>NEXT COST</span>
-            <strong>${cost} CP</strong>
+            <strong>${cost} CC</strong>
           </div>
         </div>
         <div class="modal-actions">
@@ -443,9 +487,139 @@ function renderCacheCoreModal() {
   `;
 }
 
+function cacheCoreTooltip() {
+  return "Raises the base rate for every domain before tab, focus, background, vault, daily, navigation, wake, and slot tier multipliers. Small base-rate gains compound through the whole game.";
+}
+
+function renderSlotUpgradeListModal() {
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel slot-upgrade-modal" role="dialog" aria-modal="true" aria-labelledby="slotUpgradeTitle">
+        <div class="modal-kicker">SLOT PRESTIGE</div>
+        <h2 id="slotUpgradeTitle">UPGRADE SLOTS</h2>
+        <div class="slot-upgrade-grid">
+          ${snapshot.sync.slots.map(renderSlotUpgradeOption).join("")}
+        </div>
+        <div class="modal-actions single">
+          <button class="btn" data-action="cancelModal">CLOSE</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderSlotUpgradeOption(slot) {
+  const nextTier = nextSlotTier(slot);
+  const cost = nextTier ? slotTierCost(slot, nextTier) : null;
+  const disabled = !nextTier;
+  return `
+    <button class="slot-upgrade-option ${tierClass(slot.tier)}" data-action="slotUpgradeDetail" data-slot="${slot.id}" ${disabled ? "disabled" : ""}>
+      <div class="slot-upgrade-bg">${slot.assignedDomain || "EMPTY SLOT"}</div>
+      <div class="slot-upgrade-top">
+        <span>SLOT ${slot.id}</span>
+        <strong>${disabled ? "MAX" : `${cost} CC`}</strong>
+      </div>
+      <div class="slot-upgrade-tier">TIER ${tierName(slot.tier)}</div>
+    </button>
+  `;
+}
+
+function renderSlotUpgradeDetailModal(slotId) {
+  const slot = snapshot.sync.slots.find((item) => item.id === Number(slotId));
+  if (!slot) return "";
+  const nextTier = nextSlotTier(slot);
+  const cost = nextTier ? slotTierCost(slot, nextTier) : null;
+  const affordable = nextTier && snapshot.sync.cacheCredits >= cost;
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel slot-upgrade-modal" role="dialog" aria-modal="true" aria-labelledby="slotUpgradeDetailTitle">
+        <div class="modal-kicker">SLOT ${slot.id}</div>
+        <h2 id="slotUpgradeDetailTitle">${nextTier ? "CONFIRM UPGRADE" : "SLOT MAXED"}</h2>
+        <div class="slot-upgrade-compare">
+          ${renderSlotUpgradePreview(slot, slot.tier)}
+          <div class="slot-upgrade-arrow">↓</div>
+          ${nextTier ? renderSlotUpgradePreview(slot, nextTier.tier) : `<div class="slot-upgrade-max">MAX PRESTIGE</div>`}
+        </div>
+        <div class="detail-stat-section">
+          <div class="detail-stat-row">
+            <span>UPGRADE</span>
+            <strong>${nextTier ? slotTierUpgradeSummary(slot, nextTier) : "MAX"}</strong>
+          </div>
+          <div class="detail-stat-row">
+            <span>COST</span>
+            <strong>${nextTier ? `${cost} CC` : "MAX"}</strong>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" data-action="slotUpgradeList">BACK</button>
+          <button class="btn btn-prestige" data-action="confirmSlotUpgrade" data-slot="${slot.id}" ${affordable ? "" : "disabled"}>${nextTier ? "CONFIRM" : "MAX"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function slotTierUpgradeSummary(slot, nextTier) {
+  const currentBonus = tierBonus(slot).toFixed(2);
+  const nextBonus = tierBonus({ ...slot, tier: nextTier.tier }).toFixed(2);
+  const unlock = slot.id > 3 && slot.tier === 0 && nextTier.tier === 1;
+  const baseChange = `SLOT INCOME x${currentBonus} -> x${nextBonus}`;
+  return unlock ? `PERMANENT UNLOCK +<br>${baseChange}` : baseChange;
+}
+
+function renderSlotUpgradePreview(slot, tier) {
+  return `
+    <div class="slot-upgrade-preview ${tierClass(tier)}">
+      <div class="slot-upgrade-bg">${slot.assignedDomain || "EMPTY SLOT"}</div>
+      <div class="slot-upgrade-top">
+        <span>SLOT ${slot.id}</span>
+      </div>
+      <div class="slot-upgrade-tier">TIER ${tierName(tier)}</div>
+    </div>
+  `;
+}
+
+function floorToCent(value) {
+  const number = sciToNumber(toSci(value || 0));
+  if (!Number.isFinite(number) || number <= 0) return 0;
+  return Math.floor(number * 100) / 100;
+}
+
+function welcomeBreakdownItems(award) {
+  return [
+    ["FOCUS INCOME", award.focus],
+    ["BACKGROUND INCOME", award.background],
+    ["DAILY FIRST-OPEN", award.daily],
+    ["NAVIGATION BONUS", award.navigation],
+    ["WAKE BURSTS", award.wake],
+    ["OTHER INCOME", award.other]
+  ]
+    .map(([label, value]) => [label, floorToCent(value)])
+    .filter(([, value]) => value > 0);
+}
+
+function welcomeBreakdownRows(items) {
+  return items
+    .map(([label, value]) => `
+      <div>
+        <span class="welcome-label">
+          ${label}
+          ${label === "OTHER INCOME" ? `
+            <span class="help-icon" data-tooltip="Includes any positive balance gained while the popup was closed that could not be matched to focus, background, daily first-open, navigation, or wake income.">?</span>
+          ` : ""}
+        </span>
+        <strong>${money(value)}</strong>
+      </div>
+    `)
+    .join("");
+}
+
 function renderWelcomeBackModal() {
   const award = pendingWelcomeBack();
   if (!award) return "";
+  const items = welcomeBreakdownItems(award);
+  const rows = welcomeBreakdownRows(items);
+  const displayTotal = items.reduce((sum, [, value]) => sum + value, 0);
   return `
     <div class="modal-scrim" role="presentation">
       <section class="modal-panel welcome-back-modal" role="dialog" aria-modal="true" aria-labelledby="welcomeBackTitle">
@@ -453,17 +627,15 @@ function renderWelcomeBackModal() {
         <h2 id="welcomeBackTitle">CACHE ACCRUED</h2>
         <p>Your active slots kept generating while the popup was closed.</p>
         <div class="welcome-breakdown">
-          <div>
-            <span>FOCUS INCOME</span>
-            <strong>${money(award.focus)}</strong>
-          </div>
-          <div>
-            <span>BACKGROUND INCOME</span>
-            <strong>${money(award.background)}</strong>
-          </div>
+          ${rows || `
+            <div>
+              <span>INCOME</span>
+              <strong>${money(floorToCent(award.total))}</strong>
+            </div>
+          `}
           <div class="welcome-total">
             <span>TOTAL EARNED</span>
-            <strong>${money(award.total)}</strong>
+            <strong>${money(rows ? displayTotal : floorToCent(award.total))}</strong>
           </div>
         </div>
         <div class="modal-actions single">
@@ -497,10 +669,73 @@ function renderConfirmModal() {
   `;
 }
 
-function renderDomainDetailsModal(domain) {
+function renderSwapDomainModal() {
+  const sourceSlot = snapshot.sync.slots.find((slot) => slot.id === Number(modal.sourceSlotId));
+  const targetSlot = snapshot.sync.slots.find((slot) => slot.id === Number(modal.targetSlotId));
+  const sourceDomain = sourceSlot?.assignedDomain || modal.sourceDomain;
+  const targetDomain = targetSlot?.assignedDomain || "EMPTY";
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel swap-modal" role="dialog" aria-modal="true" aria-labelledby="swapTitle">
+        <div class="modal-kicker">DOMAIN SWAP</div>
+        <h2 id="swapTitle">SWAP SLOTS?</h2>
+        <div class="swap-diagram">
+          <div class="swap-card">
+            <span>${targetDomain}</span>
+            <strong>SLOT ${modal.targetSlotId}</strong>
+          </div>
+          <div class="swap-arrow">⇄</div>
+          <div class="swap-card">
+            <span>${sourceDomain}</span>
+            <strong>SLOT ${modal.sourceSlotId}</strong>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" data-action="cancelModal">CANCEL</button>
+          <button class="btn btn-prestige" data-action="confirmSwapDomain">CONFIRM</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderLibraryDomainInfo(entry) {
+  return renderDetailStatSection("LIBRARY INFO", [
+    ["Status", entry.isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"],
+    ["Lifetime", money(entry.lifetimeEarned)],
+    ["Vault", money(entry.vaultAmount)],
+    ["Streak", String(displayStreak(entry))],
+    ["Last Visit", dateAgo(entry.lastVisited)]
+  ]);
+}
+
+function renderDomainDetailsModal(domain, source = "slot") {
   const entry = entryFor(domain);
   const slot = currentSlot(domain);
-  if (!entry || !slot) return "";
+  if (!entry) return "";
+  const fromLibrary = source === "library";
+  if (!slot) {
+    return `
+      <div class="modal-scrim" role="presentation">
+        <section class="modal-panel detail-modal" role="dialog" aria-modal="true" aria-labelledby="domainDetailsTitle">
+          <div class="modal-kicker">DOMAIN DETAILS</div>
+          <h2 id="domainDetailsTitle">${domain.toUpperCase()}</h2>
+          <div class="detail-grid">
+            ${fromLibrary ? renderLibraryDomainInfo(entry) : ""}
+            ${renderDetailStatSection("DOMAIN EARNING", [
+              ["Status", "ASSIGN TO A SLOT"],
+              ["Focused", "LOCKED"],
+              ["Background", "LOCKED"],
+              ["Vault", money(entry.vaultAmount)]
+            ])}
+          </div>
+          <div class="modal-actions single">
+            <button class="btn btn-prestige" data-action="cancelModal">CLOSE</button>
+          </div>
+        </section>
+      </div>
+    `;
+  }
   const currentStreak = Number(entry.currentStreak || 0);
   const nextStreak = Math.min(currentStreak + 1, 14);
   const navLevel = upgradeLevel(entry, "navigationBonus");
@@ -511,6 +746,7 @@ function renderDomainDetailsModal(domain) {
         <div class="modal-kicker">DOMAIN DETAILS</div>
         <h2 id="domainDetailsTitle">${domain.toUpperCase()}</h2>
         <div class="detail-grid">
+          ${fromLibrary ? renderLibraryDomainInfo(entry) : ""}
           ${renderDetailStatSection("RATES", [
             ["Focused", `${money(activeIncomeEstimate(entry, slot))}/sec`],
             ["Background", `${money(backgroundIncomeEstimate(entry, slot, 0))}/sec`],
@@ -519,23 +755,21 @@ function renderDomainDetailsModal(domain) {
           ])}
           ${renderDetailStatSection("EVENT BONUSES", [
             ["Navigation", navLevel > 0 ? money(navigationPayoutForLevel(entry, slot, navLevel)) : "LOCKED"],
-            ["Navigation Next", money(navigationPayoutForLevel(entry, slot, navLevel + 1))],
-            ["Wake Burst", wakeLevel > 0 ? money(wakeBurstForLevel(entry, slot, wakeLevel)) : "LOCKED"],
-            ["Wake Next", money(wakeBurstForLevel(entry, slot, wakeLevel + 1))]
+            ["Wake Burst", wakeLevel > 0 ? money(wakeBurstForLevel(entry, slot, wakeLevel)) : "LOCKED"]
           ])}
           ${renderDetailStatSection("VAULT + STREAK", [
             ["Vault Stored", money(entry.vaultAmount)],
             ["Vault Cap", money(vaultCap(entry))],
             ["Vault Fill", `${money(vaultRate(entry))}/sec`],
-            ["Daily Bonus", money(dailyFirstOpenBonus(entry, slot))],
-            ["Next Streak Bonus", `x${(1 + nextStreak * 0.04).toFixed(2)}`],
+            ["Daily First-Open", money(dailyFirstOpenBonus(entry, slot))],
+            ["Next Streak Mult", `x${(1 + nextStreak * 0.05 + upgradeLevel(entry, "dailyBoot") * nextStreak * 0.01).toFixed(2)}`],
             ["Next Daily Bonus", money(dailyFirstOpenBonusForStreak(entry, slot, nextStreak))]
           ])}
           ${renderDetailStatSection("MULTIPLIERS", [
             ["Base Income", `${money(domainBaseRate(entry))}/sec`],
+            ["Slot Tier", `x${tierBonus(slot).toFixed(2)}`],
             ["Tab", `x${tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2)}`],
             ["Focus", `x${focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2)}`],
-            ["Slot Tier", `x${tierBonus(slot).toFixed(2)}`],
             ["Daily Boot", `x${dailyBootMultiplier(upgradeLevel(entry, "dailyBoot")).toFixed(2)}`],
             ["Vault Pump", `x${vaultPumpMultiplier(upgradeLevel(entry, "storageDuration")).toFixed(2)}`]
           ])}
@@ -563,7 +797,7 @@ function renderDetailStatSection(title, rows) {
 }
 
 function prestigeAwardEstimate() {
-  return Math.max(0, prestigeTotalFromLifetime(snapshot.sync.totalLifetimeEarned) - Number(snapshot.sync.cpAlreadyClaimedFromLifetime || 0));
+  return Math.max(0, prestigeTotalFromLifetime(snapshot.sync.totalLifetimeEarned) - Number(snapshot.sync.ccAlreadyClaimedFromLifetime || 0));
 }
 
 function renderToast() {
@@ -597,8 +831,8 @@ function renderHeader() {
       </div>
       <div class="header-actions">
         <button class="btn btn-reset-cache" data-action="prestige">RESET</button>
-        <button class="prestige-currency" data-action="cacheCore" aria-label="Cache Points and permanent upgrades">
-          CP: <strong data-field="cachePoints">${Math.floor(snapshot.sync.cachePoints)}</strong>
+        <button class="prestige-currency" data-action="cacheCore" aria-label="Cache Credits and permanent upgrades">
+          CC: <strong data-field="cacheCredits">${Math.floor(snapshot.sync.cacheCredits)}</strong>
         </button>
       </div>
     </header>
@@ -609,8 +843,66 @@ function renderFooter(activeNav) {
   return `
     <nav class="footer-nav">
       <button class="nav-btn ${activeNav === "slots" ? "active" : ""}" data-action="home">SLOTS</button>
+      <button class="nav-btn ${activeNav === "store" ? "active" : ""}" data-action="store">STORE</button>
       <button class="nav-btn ${activeNav === "library" ? "active" : ""}" data-action="library">LIBRARY</button>
     </nav>
+  `;
+}
+
+function renderStore() {
+  shell(`
+    <main class="view active store-view">
+      <div class="upgrade-section-label">CACHE SHOP</div>
+      ${renderCacheCoreStoreItem()}
+      ${renderSlotUpgradeStoreItem()}
+    </main>
+  `, "store");
+}
+
+function renderCacheCoreStoreItem() {
+  const level = cacheCoreLevel();
+  const cost = cacheCoreCost(level);
+  const affordable = snapshot.sync.cacheCredits >= cost;
+  return `
+    <div class="upgrade-item store-upgrade-item">
+      <div class="upgrade-info" style="flex:1;">
+        <img class="upgrade-icon" src="${iconPath(32)}" alt="">
+        <div class="upgrade-details" data-tooltip="${escapeAttribute(cacheCoreTooltip())}">
+          <div>
+            <span class="upgrade-name">Cache Core</span>
+            <span class="upgrade-level">${level <= 0 ? "INACTIVE" : `Lvl ${level}`}</span>
+          </div>
+          <div class="upgrade-desc">Base rate ${money(cacheCoreBaseRate(level))}/sec -> ${money(cacheCoreBaseRate(level + 1))}/sec</div>
+        </div>
+      </div>
+      <button class="btn btn-buy" data-action="upgradeCacheCore" ${affordable ? "" : "disabled"}>
+        <span>BUY</span>
+        <span style="font-size:12px">${cost} CC</span>
+      </button>
+    </div>
+  `;
+}
+
+function slotUpgradeTooltip() {
+  return "Spend Cache Credits to prestige individual slots. Each tier boosts slot income, and extra slots become permanently unlocked once their first prestige is bought.";
+}
+
+function renderSlotUpgradeStoreItem() {
+  return `
+    <div class="upgrade-item store-upgrade-item">
+      <div class="upgrade-info" style="flex:1;">
+        <img class="upgrade-icon" src="${iconPath(12)}" alt="">
+        <div class="upgrade-details" data-tooltip="${escapeAttribute(slotUpgradeTooltip())}">
+          <div>
+            <span class="upgrade-name">Upgrade Slots</span>
+          </div>
+          <div class="upgrade-desc">Boost total income from slots.</div>
+        </div>
+      </div>
+      <button class="btn btn-buy" data-action="slotUpgradeList">
+        <span>OPEN MENU</span>
+      </button>
+    </div>
   `;
 }
 
@@ -632,8 +924,8 @@ function renderDevButtons() {
   return `
     <div class="dev-controls">
       <button class="btn" data-action="devCash">DEV +$10K</button>
-      <button class="btn btn-prestige" data-action="devPrestige">DEV +10 CP</button>
-      <button class="btn btn-danger" data-action="devReset">DEV RESET $/CP</button>
+      <button class="btn btn-prestige" data-action="devPrestige">DEV +10 CC</button>
+      <button class="btn btn-danger" data-action="devReset">DEV RESET $/CC</button>
     </div>
   `;
 }
@@ -645,7 +937,7 @@ function renderSlot(slot) {
   const domain = slot.assignedDomain;
   const entry = entryFor(domain);
   const state = stateLabel(domain);
-  const vaultReady = sciCompare(entry?.vaultAmount || 0, 0) > 0 || (entry?.dailyBonusClaimedDate !== snapshot.today && entry?.insertedOnDate !== snapshot.today);
+  const vaultReady = sciCompare(entry?.vaultAmount || 0, 0) > 0;
   return `
     <button class="slot ${tierClass(slot.tier)}" data-action="detail" data-domain="${domain}">
       <div class="slot-info">
@@ -700,6 +992,7 @@ function renderDetail(domain) {
     route = { name: "home" };
     return renderHome();
   }
+  if (!BUY_MODES.includes(buyMode)) buyMode = "1";
   const state = stateLabel(domain);
   const nextTier = nextSlotTier(slot);
   const nextTierCost = nextTier ? slotTierCost(slot, nextTier) : null;
@@ -720,26 +1013,31 @@ function renderDetail(domain) {
         </div>
         <button class="btn btn-detail" data-action="domainDetails" data-domain="${domain}">DETAILS</button>
       </div>
+      <div class="vault-panel domain-status-panel">
+        <div class="vault-info">
+          <div>
+            <span data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span>
+            <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(currentRateTooltip(domain, entry, slot))}">?</span>
+          </div>
+          <small>BASE INCOME: <span data-field="detailBaseIncome">${money(domainBaseRate(entry))}/sec</span></small>
+          <small>SLOT MULTIPLIER: <span data-field="detailSlotMultiplier">x${tierBonus(slot).toFixed(2)}</span></small>
+          <small>STREAK: <span data-field="detailStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
+        </div>
+      </div>
       <div class="vault-panel">
         <div class="vault-info">
           <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
           <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span></small>
-          <small><span data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span></small>
-          <small>STREAK: <span data-field="detailStreak">${entry.currentStreak}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
         </div>
-        <button class="btn btn-collect" data-action="claim" data-domain="${domain}">COLLECT</button>
+        <button class="btn btn-collect" data-action="claim" data-domain="${domain}" ${sciCompare(entry.vaultAmount, 0) > 0 ? "" : "disabled"}>COLLECT</button>
       </div>
       <div class="upgrade-toolbar">
-        ${["1", "10", "max"].map((mode) => `<button class="btn ${buyMode === mode ? "active" : ""}" data-action="mode" data-mode="${mode}">BUY ${mode === "max" ? "MAX" : mode}</button>`).join("")}
+        ${BUY_MODES.map((mode) => `<button class="btn ${buyMode === mode ? "active" : ""}" data-action="mode" data-mode="${mode}">BUY ${mode}</button>`).join("")}
       </div>
       <div class="upgrade-list">
-        <div class="helper-text" style="text-align:center;">
-          BASE INCOME: ${money(domainBaseRate(entry))}/sec<br>
-          <span style="color:var(--primary);">CURRENT DOMAIN INCOME: <span data-field="detailCurrentIncome">${money(incomeFor(domain))}/sec</span></span>
-        </div>
         ${renderUpgradeGroups(entry)}
       </div>
-      <button class="btn btn-prestige" data-action="tier" data-slot="${slot.id}" style="width:100%; margin-top:10px;" ${nextTier && snapshot.sync.cachePoints >= nextTierCost ? "" : "disabled"}>${nextTier ? `UPGRADE TO ${tierMaterial(nextTier.tier)} (${nextTierCost} CP)` : "SLOT MAXED"}</button>
+      <button class="btn btn-prestige" data-action="tier" data-slot="${slot.id}" style="width:100%; margin-top:10px;" ${nextTier && snapshot.sync.cacheCredits >= nextTierCost ? "" : "disabled"}>${nextTier ? `UPGRADE TO ${tierMaterial(nextTier.tier)} (${nextTierCost} CC)` : "SLOT MAXED"}</button>
       <button class="btn" data-action="picker" data-slot="${slot.id}" style="width:100%; margin-top:10px;">SWAP DOMAIN</button>
       <button class="btn btn-danger" data-action="remove" data-slot="${slot.id}">REMOVE FROM SLOT</button>
     </main>
@@ -757,14 +1055,15 @@ function renderUpgradeGroups(entry) {
 function renderUpgrade(entry, def) {
   const level = upgradeLevel(entry, def.id);
   const maxed = def.maxLevel !== null && level >= def.maxLevel;
-  const cost = upgradeCost(def, level);
+  const quantity = selectedBuyQuantity();
+  const cost = upgradeBulkCost(def, level, quantity);
   const disabled = maxed || sciCompare(snapshot.sync.balance, cost) < 0;
-  const summary = effectSummary(def.id, level);
+  const summary = effectSummary(def.id, level, upgradeTargetLevel(def, level, quantity));
   const tooltip = upgradeTooltip(def.id, level);
   return `
     <div class="upgrade-item">
       <div class="upgrade-info" style="flex:1;">
-        <img class="upgrade-icon" src="${iconPath((snapshot.upgradeDefs.indexOf(def) % 40) + 1)}" alt="">
+        <img class="upgrade-icon" src="${iconPath(def.icon)}" alt="">
         <div class="upgrade-details" data-tooltip="${escapeAttribute(tooltip)}">
           <div>
             <span class="upgrade-name">${def.name}</span>
@@ -789,8 +1088,8 @@ function escapeAttribute(value) {
     .replace(/>/g, "&gt;");
 }
 
-function effectSummary(id, level) {
-  const next = level + 1;
+function effectSummary(id, level, targetLevel = level + 1) {
+  const next = targetLevel;
   const entry = currentDetailEntry();
   const slot = entry ? currentSlot(entry.domain) : null;
   const map = {
@@ -820,7 +1119,7 @@ function upgradeTooltip(id, level) {
       "Focus Bonus boosts income while this domain is the active tab in the focused browser window."
     ],
     navigationBonus: [
-      "Navigation Bonus pays when you make a top-level navigation inside this slotted domain. It has a 15 second cooldown per domain."
+      "Navigation Bonus pays when you make a top-level navigation inside this slotted domain. It has a 1 minute cooldown per domain."
     ],
     coldStorage: [
       "Cold Storage increases the vault cap, letting this domain store more offline/background money before you collect."
@@ -838,7 +1137,7 @@ function upgradeTooltip(id, level) {
       "Idle Depth increases background income the longer the domain stays open in the background, reaching max boost after 25 minutes."
     ],
     wakeBonus: [
-      "Wake Bonus pays a burst when this domain returns from background to focused. It can trigger once per background-to-focused transition, so send the tab to background before waking it again."
+      "Wake Bonus pays a burst when this domain returns from background to focused. It has a 1 minute cooldown per domain and still requires a background-to-focused transition."
     ]
   };
   return (lines[id] || [effectSummary(id, level)]).join("\n");
@@ -885,29 +1184,42 @@ function renderLibrary(pickSlotId = null) {
         ${domains.length ? domains.map((entry) => renderLibraryItem(entry, pickSlotId)).join("") : `<div class="library-item">NO DOMAINS IN LIBRARY YET</div>`}
       </div>
     </main>
-  `, "library");
+  `, pickSlotId ? "slots" : "library");
 }
 
-function filteredLibraryDomains() {
+function filteredLibraryDomains(pickSlotId = null) {
   return Object.values(snapshot.local.domainLibrary)
     .filter((entry) => entry.domain.includes(search.trim().toLowerCase()))
-    .sort((a, b) => (b.isSlotted - a.isSlotted) || sciCompare(b.lifetimeEarned, a.lifetimeEarned));
+    .sort((a, b) => {
+      if (pickSlotId) {
+        if (!a.isSlotted && !b.isSlotted) return a.domain.localeCompare(b.domain);
+        if (a.isSlotted !== b.isSlotted) return a.isSlotted ? 1 : -1;
+        return Number(a.slotId || 0) - Number(b.slotId || 0);
+      }
+      if (a.isSlotted && b.isSlotted) return Number(a.slotId || 0) - Number(b.slotId || 0);
+      if (a.isSlotted !== b.isSlotted) return b.isSlotted - a.isSlotted;
+      return a.domain.localeCompare(b.domain);
+    });
 }
 
 function renderLibraryItem(entry, pickSlotId) {
   const isSlotted = Boolean(entry.isSlotted);
+  const isCurrentPickSlot = pickSlotId && isSlotted && Number(entry.slotId) === Number(pickSlotId);
+  const isSwapCandidate = pickSlotId && isSlotted && !isCurrentPickSlot;
+  const action = pickSlotId ? (isSwapCandidate ? "swapDomain" : "assign") : "domainDetails";
+  const label = pickSlotId ? (isCurrentPickSlot ? `SLOT ${entry.slotId}` : isSwapCandidate ? "SWAP" : "ASSIGN") : "VIEW";
   const upgradeTotal = Object.values(entry.upgrades || {}).reduce((sum, value) => sum + Number(value || 0), 0);
   return `
     <div class="library-item">
-      <div class="slot-info">
+      <div class="slot-info" ${pickSlotId ? "" : `data-action="domainDetails" data-domain="${entry.domain}" data-source="library"`}>
         ${favicon(entry.domain)}
         <div>
           <div class="slot-domain">${entry.domain}</div>
           <div class="slot-tier">${isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"} | ${upgradeTotal} UPGRADES | ${money(entry.lifetimeEarned)}</div>
         </div>
       </div>
-      <button class="btn" data-action="${pickSlotId ? "assign" : "domainSummary"}" data-domain="${entry.domain}" ${pickSlotId ? `data-slot="${pickSlotId}"` : ""} ${pickSlotId && isSlotted ? "disabled" : ""}>
-        ${pickSlotId ? (isSlotted ? `SLOT ${entry.slotId}` : "ASSIGN") : "VIEW"}
+      <button class="btn" data-action="${action}" data-domain="${entry.domain}" ${pickSlotId ? `data-slot="${pickSlotId}"` : `data-source="library"`} ${isSwapCandidate ? `data-source-slot="${entry.slotId}"` : ""} ${isCurrentPickSlot ? "disabled" : ""}>
+        ${label}
       </button>
     </div>
   `;
@@ -925,7 +1237,7 @@ function renderDomainSummary(domain) {
         <div class="vault-info">
           <div>STATUS: <span data-field="summaryStatus">${entry.isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"}</span></div>
           <small>LIFETIME: <span data-field="summaryLifetime">${money(entry.lifetimeEarned)}</span> | VAULT: <span data-field="summaryVault">${money(entry.vaultAmount)}</span></small>
-          <small>STREAK: <span data-field="summaryStreak">${entry.currentStreak}</span> | LAST VISIT: <span data-field="summaryLastVisit">${dateAgo(entry.lastVisited)}</span></small>
+          <small>STREAK: <span data-field="summaryStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="summaryLastVisit">${dateAgo(entry.lastVisited)}</span></small>
         </div>
       </div>
     </main>
@@ -941,9 +1253,10 @@ async function handleAction(event) {
   if (action === "home") route = { name: "home" };
   if (action === "detail") route = { name: "detail", domain: node.dataset.domain };
   if (action === "library") route = { name: "library" };
+  if (action === "store") route = { name: "store" };
   if (action === "domainSummary") route = { name: "domainSummary", domain: node.dataset.domain };
   if (action === "picker") route = { name: "picker", slotId: Number(node.dataset.slot) };
-  if (action === "mode") buyMode = node.dataset.mode;
+  if (action === "mode" && BUY_MODES.includes(node.dataset.mode)) buyMode = node.dataset.mode;
   if (action === "openDomain") await chrome.tabs.create({ url: `https://${node.dataset.domain}` });
   if (action === "finishOnboarding") await act("completeOnboarding");
   if (action === "addCurrent") {
@@ -980,6 +1293,16 @@ async function handleAction(event) {
       after: { routeAssignedSlot: slotId }
     };
   }
+  if (action === "swapDomain") {
+    const targetSlotId = Number(node.dataset.slot);
+    const sourceSlotId = Number(node.dataset.sourceSlot);
+    modal = {
+      name: "swapDomain",
+      sourceSlotId,
+      targetSlotId,
+      sourceDomain: node.dataset.domain
+    };
+  }
   if (action === "buy") await act("buyUpgrade", { domain: node.dataset.domain, upgradeId: node.dataset.upgrade, mode: buyMode });
   if (action === "claim") await act("claimRevisit", { domain: node.dataset.domain });
   if (action === "unlock") await act("unlockSlot");
@@ -991,8 +1314,8 @@ async function handleAction(event) {
       name: "confirm",
       variant: "danger",
       kicker: "DEV RESET",
-      title: "RESET CASH + CP?",
-      body: "This resets only current cash and Cache Points. Domain history and slots stay intact.",
+      title: "RESET CASH + CC?",
+      body: "This resets only current cash and Cache Credits. Domain history and slots stay intact.",
       confirmLabel: "RESET",
       actionType: "devResetCashAndCachePoints"
     };
@@ -1012,7 +1335,14 @@ async function handleAction(event) {
   if (action === "prestige") modal = "prestige";
   if (action === "cacheCore") modal = { name: "cacheCore" };
   if (action === "upgradeCacheCore") await act("upgradeCacheCore");
-  if (action === "domainDetails") modal = { name: "domainDetails", domain: node.dataset.domain };
+  if (action === "slotUpgradeList") modal = { name: "slotUpgradeList" };
+  if (action === "slotUpgradeDetail") modal = { name: "slotUpgradeDetail", slotId: Number(node.dataset.slot) };
+  if (action === "confirmSlotUpgrade") {
+    const slotId = Number(node.dataset.slot);
+    const result = await act("upgradeSlotTier", { slotId });
+    if (result?.ok) modal = { name: "slotUpgradeList" };
+  }
+  if (action === "domainDetails") modal = { name: "domainDetails", domain: node.dataset.domain, source: node.dataset.source || "slot" };
   if (action === "cancelModal") modal = null;
   if (action === "confirmPrestige") {
     modal = null;
@@ -1023,6 +1353,12 @@ async function handleAction(event) {
     modal = null;
     const result = await act(pending.actionType, pending.payload || {});
     if (result?.ok && pending.after?.routeAssignedSlot) routeToAssignedDomain(pending.after.routeAssignedSlot);
+  }
+  if (action === "confirmSwapDomain" && modal?.name === "swapDomain") {
+    const pending = modal;
+    modal = null;
+    const result = await act("swapSlots", { fromSlotId: pending.sourceSlotId, toSlotId: pending.targetSlotId });
+    if (result?.ok) routeToAssignedDomain(pending.targetSlotId);
   }
   if (action === "collectWelcomeBack") await collectWelcomeBack();
 
@@ -1061,7 +1397,7 @@ function routeToAssignedDomain(slotId) {
 async function act(type, payload = {}) {
   const result = await send(type, payload);
   if (!result?.ok) showToast(result?.error || "Action failed.", "warning");
-  else if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${result.award} CP.`);
+  else if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${result.award} CC.`);
   else if (type === "upgradeCacheCore") showToast(`CACHE CORE LEVEL ${result.level}.`);
   else showToast("SUCCESS");
   snapshot = await send("snapshot");
@@ -1072,6 +1408,7 @@ async function act(type, payload = {}) {
 function render() {
   if (!snapshot) return;
   if (route.name === "detail") return renderDetail(route.domain);
+  if (route.name === "store") return renderStore();
   if (route.name === "library") return renderLibrary();
   if (route.name === "picker") return renderLibrary(route.slotId);
   if (route.name === "domainSummary") return renderDomainSummary(route.domain);

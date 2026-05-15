@@ -325,8 +325,9 @@ function vaultRate(domain, economy, cacheCoreLevel) {
 function dailyFirstOpenValue(domain, economy, slotTierBonusValue, cacheCoreLevel) {
   const dailyBoot = level(domain, "dailyBoot");
   const baseDaily = Math.max(20, domainBaseRate(domain, economy, cacheCoreLevel) * 60 * 35);
-  const bootMultiplier = 1 + 0.18 * Math.pow(dailyBoot, 0.95);
-  const streakMultiplier = 1 + Math.min(domain.currentStreak, 14) * 0.04;
+  const bootMultiplier = 1 + 0.18 * dailyBoot;
+  const streak = Math.min(domain.currentStreak, 14);
+  const streakMultiplier = 1 + streak * 0.05 + dailyBoot * streak * 0.01;
   return baseDaily * bootMultiplier * streakMultiplier * slotTierBonusValue;
 }
 
@@ -515,7 +516,7 @@ function simulateEconomy(economy, config) {
         if (config.enableNavigationBonus && config.navigationEventsPerFocusedHour > 0) {
           const events = (focusSecondsPerDomain / 3600) * config.navigationEventsPerFocusedHour;
           const navLevel = level(domain, "navigationBonus");
-          const amount = navLevel > 0 ? dailyFirstOpenValue(domain, economy, tierBonus(economy, slot.tier), state.cacheCoreLevel) * 0.13 * (1 + 0.18 * navLevel) * events : 0;
+          const amount = navLevel > 0 ? dailyFirstOpenValue(domain, economy, tierBonus(economy, slot.tier), state.cacheCoreLevel) * 0.07 * (1 + 0.18 * navLevel) * events : 0;
           addEarnings(state, domain, amount, "navigation");
         }
         if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {

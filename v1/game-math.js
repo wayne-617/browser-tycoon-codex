@@ -3,7 +3,7 @@
   const VAULT_RATE = BASE_RATE * 0.02;
   const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
   const PRESTIGE_DIVISOR = 100000;
-  const SLOT_PRESTIGE_COST_SCALE = 1.5;
+  const SLOT_PRESTIGE_COST_SCALE = 5.0;
   const CACHE_CORE_MULTIPLIER = 1.5;
   const CACHE_CORE_BASE_COST = 5;
   const CACHE_CORE_COST_GROWTH = 1.5;
@@ -11,16 +11,16 @@
   const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 
   const UPGRADE_DEFS = Object.freeze([
-    { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 35, growth: 1.45, maxLevel: null },
-    { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 25, growth: 1.4, maxLevel: null },
-    { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 60, growth: 1.45, maxLevel: null },
-    { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 50, growth: 1.55, maxLevel: null },
-    { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 60, growth: 1.55, maxLevel: null },
-    { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 25, growth: 1.4, maxLevel: null },
-    { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 50, growth: 1.4, maxLevel: null },
-    { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 80, growth: 1.55, maxLevel: null },
-    { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 100, growth: 1.55, maxLevel: null },
-    { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 125, growth: 1.45, maxLevel: null }
+    { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 35, growth: 1.5, maxLevel: null, icon: 13 },
+    { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 25, growth: 1.3, maxLevel: null, icon: 16 },
+    { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 100, growth: 1.65, maxLevel: null, icon: 37 },
+    { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 100, growth: 1.6, maxLevel: null, icon: 22 },
+    { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 100, growth: 1.6, maxLevel: null, icon: 5 },
+    { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 25, growth: 1.4, maxLevel: null, icon: 26 },
+    { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 50, growth: 1.35, maxLevel: null, icon: 33 },
+    { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 150, growth: 1.8, maxLevel: null, icon: 30 },
+    { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 150, growth: 1.8, maxLevel: null, icon: 9 },
+    { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 75, growth: 1.4, maxLevel: null, icon: 10 }
   ]);
 
   const SLOT_TIERS = Object.freeze([
@@ -175,7 +175,7 @@
   }
 
   function dailyBootMultiplier(level) {
-    return 1 + 0.18 * Math.pow(level, 0.95);
+    return 1 + 0.18 * level;
   }
 
   function vaultCap(entry, coldLevel = getUpgradeLevel(entry, "coldStorage"), cacheCoreLevel = 0) {
@@ -215,7 +215,8 @@
     const dailyBoot = getUpgradeLevel(entry, "dailyBoot");
     const slotStreak = slot?.streakBonusTier || 0;
     const baseDaily = Math.max(20, domainBaseRate(entry, cacheCoreLevel) * 60 * 35);
-    const streakMultiplier = 1 + Math.min(Number(streak || 0), 14) * 0.04;
+    const streakLevel = Math.min(Number(streak || 0), 14);
+    const streakMultiplier = 1 + streakLevel * 0.05 + dailyBoot * streakLevel * 0.01;
     return baseDaily * dailyBootMultiplier(dailyBoot) * streakMultiplier * (1 + slotStreak * 0.15);
   }
 
@@ -225,7 +226,7 @@
 
   function navigationPayoutForLevel(entry, slot, level, cacheCoreLevel = 0) {
     if (!entry || !slot || level <= 0) return 0;
-    return dailyFirstOpenBonus(entry, slot, cacheCoreLevel) * 0.13 * (1 + 0.18 * level);
+    return dailyFirstOpenBonus(entry, slot, cacheCoreLevel) * 0.07 * (1 + 0.18 * level);
   }
 
   function wakeBurstForLevel(entry, slot, level, cacheCoreLevel = 0) {

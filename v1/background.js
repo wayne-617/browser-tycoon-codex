@@ -29,6 +29,7 @@ const {
 const ALARM_NAME = "browser-tycoon-accrual";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
 const WELCOME_BACK_MIN_SECONDS = 60;
+const EVENT_BONUS_COOLDOWN_MS = 60 * 1000;
 const TODAY = () => new Date().toLocaleDateString("en-CA");
 
 function normalizeCurrencyState(sync, local) {
@@ -44,8 +45,8 @@ function defaultSyncState() {
   return {
     balance: 0,
     totalLifetimeEarned: 0,
-    cachePoints: 0,
-    cpAlreadyClaimedFromLifetime: 0,
+    cacheCredits: 0,
+    ccAlreadyClaimedFromLifetime: 0,
     cacheCoreLevel: 0,
     unlockedSlots: 3,
     prestigeCount: 0,
@@ -67,6 +68,7 @@ function defaultLocalState() {
     presence: {},
     lastAccrualAt: Date.now(),
     lastNavigationBonusAt: {},
+    lastWakeBonusAt: {},
     lastPopupSeenAt: 0,
     lastPopupBalance: null,
     pendingWelcomeBack: null
@@ -74,11 +76,22 @@ function defaultLocalState() {
 }
 
 async function getState() {
+  const syncRequest = {
+    ...defaultSyncState(),
+    cachePoints: null,
+    cpAlreadyClaimedFromLifetime: null
+  };
   const [syncRaw, localRaw] = await Promise.all([
-    chrome.storage.sync.get(defaultSyncState()),
+    chrome.storage.sync.get(syncRequest),
     chrome.storage.local.get(defaultLocalState())
   ]);
   const sync = { ...defaultSyncState(), ...syncRaw };
+  if (syncRaw.cachePoints != null && syncRaw.cacheCredits == null) sync.cacheCredits = syncRaw.cachePoints;
+  if (syncRaw.cpAlreadyClaimedFromLifetime != null && syncRaw.ccAlreadyClaimedFromLifetime == null) {
+    sync.ccAlreadyClaimedFromLifetime = syncRaw.cpAlreadyClaimedFromLifetime;
+  }
+  if (!Number.isFinite(sync.cacheCredits)) sync.cacheCredits = 0;
+  if (!Number.isFinite(sync.ccAlreadyClaimedFromLifetime)) sync.ccAlreadyClaimedFromLifetime = 0;
   sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
   const local = { ...defaultLocalState(), ...localRaw };
   normalizeCurrencyState(sync, local);
@@ -90,8 +103,8 @@ async function saveState(sync, local) {
     chrome.storage.sync.set({
       balance: sync.balance,
       totalLifetimeEarned: sync.totalLifetimeEarned,
-      cachePoints: sync.cachePoints,
-      cpAlreadyClaimedFromLifetime: sync.cpAlreadyClaimedFromLifetime,
+      cacheCredits: sync.cacheCredits,
+      ccAlreadyClaimedFromLifetime: sync.ccAlreadyClaimedFromLifetime,
       cacheCoreLevel: sync.cacheCoreLevel,
       unlockedSlots: sync.unlockedSlots,
       prestigeCount: sync.prestigeCount,
@@ -104,6 +117,7 @@ async function saveState(sync, local) {
       presence: local.presence,
       lastAccrualAt: local.lastAccrualAt,
       lastNavigationBonusAt: local.lastNavigationBonusAt,
+      lastWakeBonusAt: local.lastWakeBonusAt,
       lastPopupSeenAt: local.lastPopupSeenAt,
       lastPopupBalance: local.lastPopupBalance,
       pendingWelcomeBack: local.pendingWelcomeBack
@@ -181,19 +195,23 @@ function entryVisitDate(entry) {
 
 function recordFocusedVisit(entry, now = Date.now()) {
   const today = TODAY();
-  if (entryVisitDate(entry) === today) return;
+  const previousVisitDate = entryVisitDate(entry);
+  if (previousVisitDate === today) {
+    entry.lastVisited = now;
+    return false;
+  }
   const yesterday = new Date(now - 86400000).toLocaleDateString("en-CA");
-  entry.currentStreak = entryVisitDate(entry) === yesterday ? entry.currentStreak + 1 : 1;
+  entry.currentStreak = previousVisitDate === yesterday ? entry.currentStreak + 1 : 1;
   entry.lastVisited = now;
+  return true;
 }
 
 function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0) {
   const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry, undefined, cacheCoreLevel));
-  const daily = entry.dailyBonusClaimedDate === TODAY() || entry.insertedOnDate === TODAY() ? 0 : dailyFirstOpenBonus(entry, slot, cacheCoreLevel);
   return {
     vault: stored,
-    daily,
-    total: stored + daily
+    daily: 0,
+    total: stored
   };
 }
 
@@ -204,15 +222,104 @@ function addEarnings(sync, entry, amount) {
   entry.lifetimeEarned = sciAdd(entry.lifetimeEarned, amount);
 }
 
-function welcomeBackEstimate(sync, local, from, to) {
-  const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (to - from) / 1000));
-  const estimate = {
+function createWelcomeBackAward(local, now) {
+  return {
     focus: { ...SCI_ZERO },
     background: { ...SCI_ZERO },
+    daily: { ...SCI_ZERO },
+    navigation: { ...SCI_ZERO },
+    wake: { ...SCI_ZERO },
+    other: { ...SCI_ZERO },
     total: { ...SCI_ZERO },
-    seconds: Math.floor(elapsedSeconds),
-    generatedAt: to
+    seconds: Math.floor((now - local.lastPopupSeenAt) / 1000),
+    generatedAt: now
   };
+}
+
+function welcomeBackKnownTotal(award) {
+  return ["focus", "background", "daily", "navigation", "wake"].reduce((total, key) => sciAdd(total, award?.[key] || SCI_ZERO), SCI_ZERO);
+}
+
+function recordWelcomeBackAward(local, bucket, amount, now) {
+  if (!local.lastPopupSeenAt || !local.lastPopupBalance || amount <= 0) return;
+  if ((now - local.lastPopupSeenAt) / 1000 < WELCOME_BACK_MIN_SECONDS) return;
+  if (!local.pendingWelcomeBack || sciCompare(local.pendingWelcomeBack.total, 0) <= 0) {
+    local.pendingWelcomeBack = createWelcomeBackAward(local, now);
+  }
+  if (!local.pendingWelcomeBack[bucket]) local.pendingWelcomeBack[bucket] = { ...SCI_ZERO };
+  local.pendingWelcomeBack[bucket] = sciAdd(local.pendingWelcomeBack[bucket], amount);
+  local.pendingWelcomeBack.total = sciAdd(local.pendingWelcomeBack.total, amount);
+  local.pendingWelcomeBack.seconds = Math.floor((now - local.lastPopupSeenAt) / 1000);
+  local.pendingWelcomeBack.generatedAt = now;
+}
+
+function recordWelcomeBackAccrual(local, state, amount, now) {
+  if (!["active", "background"].includes(state)) return;
+  recordWelcomeBackAward(local, state === "active" ? "focus" : "background", amount, now);
+}
+
+function assignWelcomeBackRemainder(sync, local, award, remainder) {
+  if (sciCompare(remainder, 0) <= 0) return;
+  const weightedBuckets = { focus: 0, background: 0 };
+  const now = Date.now();
+  for (const slot of sync.slots) {
+    if (!slot.assignedDomain) continue;
+    const domain = slot.assignedDomain;
+    const presence = local.presence[domain];
+    if (!["active", "background"].includes(presence?.state)) continue;
+    const entry = getDomainEntry(local, domain);
+    const rate = domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel);
+    if (!Number.isFinite(rate) || rate <= 0) continue;
+    const bucket = presence.state === "active" ? "focus" : "background";
+    weightedBuckets[bucket] += rate;
+  }
+  const totalWeight = weightedBuckets.focus + weightedBuckets.background;
+  if (totalWeight <= 0) {
+    award.other = sciAdd(award.other || SCI_ZERO, remainder);
+    return;
+  }
+  const remainderNumber = sciToNumber(remainder);
+  for (const [bucket, weight] of Object.entries(weightedBuckets)) {
+    if (weight <= 0) continue;
+    award[bucket] = sciAdd(award[bucket] || SCI_ZERO, remainderNumber * (weight / totalWeight));
+  }
+}
+
+function recordFocusedVisitAndDaily(sync, local, entry, slot, now = Date.now()) {
+  const today = TODAY();
+  const isFirstVisitToday = recordFocusedVisit(entry, now);
+  if (!isFirstVisitToday) return 0;
+  if (!slot || entry.dailyBonusClaimedDate === today || entry.insertedOnDate === today) return 0;
+  const amount = dailyFirstOpenBonus(entry, slot, sync.cacheCoreLevel);
+  entry.dailyBonusClaimedDate = today;
+  addEarnings(sync, entry, amount);
+  recordWelcomeBackAward(local, "daily", amount, now);
+  return amount;
+}
+
+function recordForegroundDomainEvent(sync, local, domain, slot, now = Date.now()) {
+  const old = local.presence[domain];
+  const entry = getDomainEntry(local, domain);
+  const lastWake = local.lastWakeBonusAt[domain] || 0;
+  if (old?.state === "background" && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
+    const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel);
+    addEarnings(sync, entry, amount);
+    recordWelcomeBackAward(local, "wake", amount, now);
+    local.lastWakeBonusAt[domain] = now;
+  }
+  recordFocusedVisitAndDaily(sync, local, entry, slot, now);
+  local.presence[domain] = {
+    state: "active",
+    openCount: Math.max(1, Number(old?.openCount || 0)),
+    backgroundSince: null,
+    updatedAt: now
+  };
+}
+
+function welcomeBackEstimate(sync, local, from, to) {
+  const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (to - from) / 1000));
+  const estimate = createWelcomeBackAward({ ...local, lastPopupSeenAt: to - elapsedSeconds * 1000 }, to);
+  estimate.seconds = Math.floor(elapsedSeconds);
   if (elapsedSeconds <= 0) return estimate;
   for (const slot of sync.slots) {
     if (!slot.assignedDomain) continue;
@@ -234,13 +341,20 @@ function welcomeBackEstimate(sync, local, from, to) {
 
 function updateWelcomeBack(sync, local, now = Date.now()) {
   if (local.pendingWelcomeBack && sciCompare(local.pendingWelcomeBack.total, 0) > 0) {
-    local.lastPopupSeenAt = now;
+    const lastSeen = Number(local.lastPopupSeenAt || 0);
     if (local.lastPopupBalance) {
       const actualTotal = sciSub(sync.balance, local.lastPopupBalance);
+      const knownTotal = welcomeBackKnownTotal(local.pendingWelcomeBack);
+      assignWelcomeBackRemainder(sync, local, local.pendingWelcomeBack, sciSub(actualTotal, knownTotal));
+      const updatedKnownTotal = welcomeBackKnownTotal(local.pendingWelcomeBack);
+      const other = sciSub(actualTotal, updatedKnownTotal);
+      local.pendingWelcomeBack.other = sciCompare(other, 0) > 0 ? other : { ...SCI_ZERO };
       if (sciCompare(actualTotal, local.pendingWelcomeBack.total) > 0) {
         local.pendingWelcomeBack.total = actualTotal;
       }
     }
+    if (lastSeen) local.pendingWelcomeBack.seconds = Math.floor((now - lastSeen) / 1000);
+    local.lastPopupSeenAt = now;
     return local.pendingWelcomeBack;
   }
   const lastSeen = Number(local.lastPopupSeenAt || 0);
@@ -261,6 +375,11 @@ function updateWelcomeBack(sync, local, now = Date.now()) {
     return null;
   }
   const estimate = welcomeBackEstimate(sync, local, lastSeen, now);
+  const knownTotal = welcomeBackKnownTotal(estimate);
+  assignWelcomeBackRemainder(sync, local, estimate, sciSub(actualTotal, knownTotal));
+  const updatedKnownTotal = welcomeBackKnownTotal(estimate);
+  const other = sciSub(actualTotal, updatedKnownTotal);
+  estimate.other = sciCompare(other, 0) > 0 ? other : { ...SCI_ZERO };
   estimate.total = actualTotal;
   local.pendingWelcomeBack = estimate;
   return estimate;
@@ -277,7 +396,9 @@ function settleAccrual(sync, local, now = Date.now()) {
     const entry = getDomainEntry(local, slot.assignedDomain);
     const presence = local.presence[slot.assignedDomain];
     const liveRate = domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel);
-    addEarnings(sync, entry, liveRate * elapsedSeconds);
+    const liveGain = liveRate * elapsedSeconds;
+    addEarnings(sync, entry, liveGain);
+    recordWelcomeBackAccrual(local, presence?.state, liveGain, now);
     const cap = vaultCap(entry, undefined, sync.cacheCoreLevel);
     const currentVault = sciToNumber(entry.vaultAmount);
     const vaultGain = Math.min(cap - currentVault, vaultRate(entry, undefined, sync.cacheCoreLevel) * elapsedSeconds);
@@ -314,11 +435,15 @@ async function rebuildPresence(sync, local) {
     let state = "closed";
     if (seen?.active) state = "active";
     else if (seen?.openCount > 0) state = "background";
-    if (old?.state === "background" && state === "active" && slot) {
+    const lastWake = local.lastWakeBonusAt[domain] || 0;
+    if (old?.state === "background" && state === "active" && slot && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
       const entry = getDomainEntry(local, domain);
-      addEarnings(sync, entry, wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel));
+      const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel);
+      addEarnings(sync, entry, amount);
+      recordWelcomeBackAward(local, "wake", amount, now);
+      local.lastWakeBonusAt[domain] = now;
     }
-    if (state === "active") recordFocusedVisit(getDomainEntry(local, domain), now);
+    if (state === "active") recordFocusedVisitAndDaily(sync, local, getDomainEntry(local, domain), slot, now);
     next[domain] = {
       state,
       openCount: seen?.openCount || 0,
@@ -331,8 +456,8 @@ async function rebuildPresence(sync, local) {
 
 async function settleAndSave({ rebuild = true } = {}) {
   const { sync, local } = await getState();
-  if (rebuild) await rebuildPresence(sync, local);
   settleAccrual(sync, local);
+  if (rebuild) await rebuildPresence(sync, local);
   await saveState(sync, local);
   await updateBadge(sync);
   return { sync, local };
@@ -416,22 +541,34 @@ async function collectWelcomeBack() {
   return { ok: true, award };
 }
 
+function upgradeBulkCost(def, level, quantity) {
+  let total = 0;
+  for (let offset = 0; offset < quantity; offset += 1) {
+    const nextLevel = level + offset;
+    if (def.maxLevel !== null && nextLevel >= def.maxLevel) break;
+    total += upgradeCost(def, nextLevel);
+  }
+  return total;
+}
+
 function buyUpgrade(sync, local, domain, upgradeId, mode) {
   const def = UPGRADE_DEFS.find((upgrade) => upgrade.id === upgradeId);
   const entry = getDomainEntry(local, domain);
   if (!def || !entry) return { ok: false, error: "Upgrade unavailable." };
+  const target = mode === "10" ? 10 : 1;
+  const startLevel = getUpgradeLevel(entry, upgradeId);
+  if (def.maxLevel !== null && startLevel >= def.maxLevel) return { ok: false, error: "Upgrade is maxed." };
+  const totalCost = upgradeBulkCost(def, startLevel, target);
+  if (sciCompare(sync.balance, totalCost) < 0) return { ok: false, error: "Not enough cash." };
+  sync.balance = sciSub(sync.balance, totalCost);
   let bought = 0;
-  const target = mode === "10" ? 10 : mode === "max" ? 9999 : 1;
   while (bought < target) {
     const level = getUpgradeLevel(entry, upgradeId);
     if (def.maxLevel !== null && level >= def.maxLevel) break;
-    const cost = upgradeCost(def, level);
-    if (sciCompare(sync.balance, cost) < 0) break;
-    sync.balance = sciSub(sync.balance, cost);
     entry.upgrades[upgradeId] = level + 1;
     bought += 1;
   }
-  return bought > 0 ? { ok: true, bought } : { ok: false, error: "Not enough cash." };
+  return { ok: true, bought };
 }
 
 async function addCurrentSite(slotId) {
@@ -443,6 +580,17 @@ async function addCurrentSite(slotId) {
 async function activeTabDomain() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return normalizeDomainFromUrl(tab?.url);
+}
+
+async function isForegroundTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab?.active) return false;
+    const window = await chrome.windows.get(tab.windowId);
+    return Boolean(window?.focused);
+  } catch {
+    return false;
+  }
 }
 
 async function assignDomainToSlot(slotId, domain, options = {}) {
@@ -472,10 +620,6 @@ async function assignDomainToSlot(slotId, domain, options = {}) {
   slot.assignedDomain = domain;
   entry.isSlotted = true;
   entry.slotId = slot.id;
-  if (options.fromCurrentSite) {
-    const activeDomain = normalizeDomainInput(options.currentDomain) || await activeTabDomain();
-    if (activeDomain === domain) recordFocusedVisit(entry);
-  }
   await rebuildPresence(sync, local);
   await saveState(sync, local);
   return { ok: true };
@@ -518,7 +662,6 @@ async function claimRevisit(domain) {
   const entry = getDomainEntry(local, domain);
   const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel);
   if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
-  entry.dailyBonusClaimedDate = TODAY();
   entry.vaultAmount = { ...SCI_ZERO };
   addEarnings(sync, entry, payout.total);
   await saveState(sync, local);
@@ -543,8 +686,8 @@ async function upgradeSlotTier(slotId) {
   if (!slot || slot.tier >= 5) return { ok: false, error: "Slot tier is maxed." };
   const next = SLOT_TIERS.find((tier) => tier.tier === slot.tier + 1);
   const cost = slotTierCost(slot.id, next.tier);
-  if (sync.cachePoints < cost) return { ok: false, error: "Not enough CP." };
-  sync.cachePoints -= cost;
+  if (sync.cacheCredits < cost) return { ok: false, error: "Not enough CC." };
+  sync.cacheCredits -= cost;
   slot.tier += 1;
   await saveState(sync, local);
   return { ok: true };
@@ -553,8 +696,8 @@ async function upgradeSlotTier(slotId) {
 async function upgradeCacheCore() {
   const { sync, local } = await settleAndSave();
   const cost = cacheCoreCost(sync.cacheCoreLevel);
-  if (sync.cachePoints < cost) return { ok: false, error: "Not enough CP." };
-  sync.cachePoints -= cost;
+  if (sync.cacheCredits < cost) return { ok: false, error: "Not enough CC." };
+  sync.cacheCredits -= cost;
   sync.cacheCoreLevel += 1;
   await saveState(sync, local);
   return {
@@ -568,9 +711,9 @@ async function upgradeCacheCore() {
 async function clearCachePrestige() {
   const { sync, local } = await settleAndSave();
   const cpTotal = prestigeTotalFromLifetime(sync.totalLifetimeEarned);
-  const award = Math.max(0, cpTotal - sync.cpAlreadyClaimedFromLifetime);
-  sync.cachePoints += award;
-  sync.cpAlreadyClaimedFromLifetime = cpTotal;
+  const award = Math.max(0, cpTotal - sync.ccAlreadyClaimedFromLifetime);
+  sync.cacheCredits += award;
+  sync.ccAlreadyClaimedFromLifetime = cpTotal;
   sync.balance = { ...SCI_ZERO };
   sync.prestigeCount += 1;
   for (const domain of Object.keys(local.domainLibrary)) {
@@ -602,8 +745,8 @@ async function devAddCash(amount = 1000) {
 async function devAddCachePoints(amount = 10) {
   const { sync, local } = await settleAndSave();
   const value = Number(amount);
-  if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid CP amount." };
-  sync.cachePoints += value;
+  if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid CC amount." };
+  sync.cacheCredits += value;
   await saveState(sync, local);
   return { ok: true, amount: value };
 }
@@ -611,7 +754,7 @@ async function devAddCachePoints(amount = 10) {
 async function devResetCashAndCachePoints() {
   const { sync, local } = await settleAndSave();
   sync.balance = { ...SCI_ZERO };
-  sync.cachePoints = 0;
+  sync.cacheCredits = 0;
   await saveState(sync, local);
   return { ok: true };
 }
@@ -620,25 +763,40 @@ async function navigationBonus(details) {
   if (details.frameId !== 0) return;
   const domain = normalizeDomainFromUrl(details.url);
   if (!domain) return;
-  const { sync, local } = await settleAndSave();
+  const isForeground = await isForegroundTab(details.tabId);
+  const { sync, local } = await getState();
+  settleAccrual(sync, local);
   const slot = sync.slots.find((item) => item.assignedDomain === domain);
-  if (!slot) return;
-  const entry = getDomainEntry(local, domain);
-  const level = getUpgradeLevel(entry, "navigationBonus");
-  if (level <= 0) {
+  if (!slot) {
+    await rebuildPresence(sync, local);
     await saveState(sync, local);
+    await updateBadge(sync);
     return;
   }
   const now = Date.now();
-  const last = local.lastNavigationBonusAt[domain] || 0;
-  if (now - last < 15000) {
+  if (isForeground) recordForegroundDomainEvent(sync, local, domain, slot, now);
+  const entry = getDomainEntry(local, domain);
+  const level = getUpgradeLevel(entry, "navigationBonus");
+  if (level <= 0) {
+    await rebuildPresence(sync, local);
     await saveState(sync, local);
+    await updateBadge(sync);
+    return;
+  }
+  const last = local.lastNavigationBonusAt[domain] || 0;
+  if (now - last < EVENT_BONUS_COOLDOWN_MS) {
+    await rebuildPresence(sync, local);
+    await saveState(sync, local);
+    await updateBadge(sync);
     return;
   }
   const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel);
   local.lastNavigationBonusAt[domain] = now;
   addEarnings(sync, entry, amount);
+  recordWelcomeBackAward(local, "navigation", amount, now);
+  await rebuildPresence(sync, local);
   await saveState(sync, local);
+  await updateBadge(sync);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {

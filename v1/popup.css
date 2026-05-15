@@ -155,7 +155,7 @@ body {
 .prestige-currency:hover {
   background: rgba(185, 0, 255, 0.1);
   box-shadow: 0 0 8px rgba(185, 0, 255, 0.4);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 .btn-reset-cache {
@@ -255,6 +255,10 @@ body {
   border: 1px solid var(--border);
   background: rgba(4, 13, 20, 0.42);
   padding: 6px;
+}
+
+.store-upgrade-item {
+  margin-bottom: 10px;
 }
 
 .slots-grid {
@@ -655,6 +659,10 @@ body {
   flex: 0 0 auto;
 }
 
+.library-item .slot-info[data-action] {
+  cursor: pointer;
+}
+
 .library-item:hover {
   border-color: rgba(0, 240, 255, 0.45);
   background: rgba(10, 25, 47, 0.9);
@@ -675,6 +683,10 @@ body {
   box-shadow: inset 0 0 14px rgba(0, 240, 255, 0.06);
 }
 
+.domain-status-panel {
+  margin-bottom: 8px;
+}
+
 .vault-info {
   color: var(--text);
 }
@@ -687,15 +699,35 @@ body {
 
 .upgrade-toolbar {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
-  margin-bottom: 10px;
+  margin: 16px 0 0;
+}
+
+.upgrade-toolbar .btn {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: rgba(148, 163, 184, 0.04);
+}
+
+.upgrade-toolbar .btn:hover {
+  color: var(--text);
+  border-color: rgba(148, 163, 184, 0.55);
+  background: rgba(148, 163, 184, 0.08);
+  box-shadow: none;
 }
 
 .upgrade-toolbar .active {
   color: var(--secondary);
   border-color: var(--secondary);
   background: rgba(185, 0, 255, 0.08);
+}
+
+.upgrade-toolbar .active:hover {
+  color: var(--secondary);
+  border-color: var(--secondary);
+  background: rgba(185, 0, 255, 0.1);
+  box-shadow: 0 0 8px rgba(185, 0, 255, 0.4);
 }
 
 .upgrade-section-label {
@@ -710,6 +742,14 @@ body {
     rgba(4, 13, 20, 0.52);
   padding: 6px 8px;
   box-shadow: 0 0 10px rgba(185, 0, 255, 0.16), inset 0 0 12px rgba(0, 240, 255, 0.05);
+}
+
+.upgrade-list .upgrade-section-label:first-child {
+  margin-top: 8px;
+}
+
+.store-view .upgrade-section-label:first-child {
+  margin-top: 0;
 }
 
 .upgrade-list {
@@ -872,6 +912,57 @@ body {
   margin-top: 0;
 }
 
+.swap-diagram {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.swap-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: rgba(4, 13, 20, 0.5);
+  padding: 8px;
+}
+
+.swap-card span {
+  display: block;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swap-card strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--primary);
+  font-weight: normal;
+}
+
+.swap-arrow {
+  color: var(--secondary);
+  font-size: 24px;
+  text-shadow: 0 0 7px rgba(185, 0, 255, 0.42);
+}
+
+.swap-result {
+  margin: 10px 0 14px;
+  padding: 8px;
+  border: 1px solid rgba(0, 240, 255, 0.38);
+  background: rgba(0, 240, 255, 0.05);
+  color: var(--text-muted);
+  text-align: left;
+  line-height: 1.25;
+}
+
+.swap-result strong {
+  color: var(--text);
+  font-weight: normal;
+}
+
 .modal-kicker {
   color: var(--secondary);
   font-size: 16px;
@@ -937,6 +1028,68 @@ body {
   color: var(--text-muted);
 }
 
+.welcome-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.help-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid rgba(0, 240, 255, 0.58);
+  border-radius: 50%;
+  color: var(--primary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
+  flex: 0 0 auto;
+}
+
+.help-icon-muted {
+  border-color: rgba(148, 163, 184, 0.62);
+  color: #94a3b8;
+  margin-left: 4px;
+  vertical-align: middle;
+  transform: translateY(-1px);
+}
+
+.help-icon::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 7px);
+  z-index: 45;
+  width: 230px;
+  transform: translateX(-50%);
+  padding: 8px;
+  border: 1px solid var(--secondary);
+  background:
+    linear-gradient(180deg, rgba(185, 0, 255, 0.14), rgba(4, 13, 20, 0.96)),
+    var(--bg-color);
+  color: var(--text);
+  box-shadow: 0 0 12px rgba(185, 0, 255, 0.32);
+  font-size: 13px;
+  line-height: 1.15;
+  text-transform: none;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease 0.25s, visibility 0s linear 0.37s;
+}
+
+.help-icon:hover::after,
+.help-icon:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.25s, 0s;
+}
+
 .welcome-breakdown strong {
   color: var(--primary);
   font-size: 22px;
@@ -967,6 +1120,10 @@ body {
 
 .modal-actions.single {
   grid-template-columns: 1fr;
+}
+
+.detail-stat-section + .modal-actions {
+  margin-top: 14px;
 }
 
 .detail-modal {
@@ -1023,6 +1180,174 @@ body {
   font-weight: normal;
   text-align: right;
   overflow-wrap: anywhere;
+}
+
+.slot-upgrade-modal {
+  max-height: 520px;
+  display: flex;
+  flex-direction: column;
+}
+
+.slot-upgrade-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 9px;
+  margin: 10px 0 14px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.slot-upgrade-option,
+.slot-upgrade-preview {
+  --slot-frame: var(--border);
+  --slot-glow: rgba(0, 240, 255, 0.14);
+  --slot-wash: rgba(0, 240, 255, 0.03);
+  position: relative;
+  min-height: 68px;
+  border: 2px solid var(--slot-frame);
+  background:
+    linear-gradient(115deg, var(--slot-wash), rgba(10, 25, 47, 0) 52%),
+    var(--bg-panel);
+  color: var(--text);
+  font-family: inherit;
+  overflow: hidden;
+  text-align: left;
+}
+
+.slot-upgrade-option {
+  cursor: pointer;
+  padding: 10px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.slot-upgrade-option:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 0 10px var(--slot-glow);
+}
+
+.slot-upgrade-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+
+.slot-upgrade-option.slot-tier-1,
+.slot-upgrade-preview.slot-tier-1 {
+  --slot-frame: #b86a36;
+  --slot-glow: rgba(216, 124, 61, 0.28);
+  --slot-wash: rgba(184, 106, 54, 0.13);
+  --slot-sheen: rgba(255, 177, 116, 0.16);
+}
+
+.slot-upgrade-option.slot-tier-2,
+.slot-upgrade-preview.slot-tier-2 {
+  --slot-frame: #c9d8e8;
+  --slot-glow: rgba(196, 222, 244, 0.32);
+  --slot-wash: rgba(174, 202, 226, 0.14);
+  --slot-sheen: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 0 7px rgba(196, 222, 244, 0.16);
+}
+
+.slot-upgrade-option.slot-tier-3,
+.slot-upgrade-preview.slot-tier-3 {
+  --slot-frame: #ffd166;
+  --slot-glow: rgba(255, 209, 102, 0.38);
+  --slot-wash: rgba(255, 209, 102, 0.17);
+  --slot-sheen: rgba(255, 240, 174, 0.26);
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.18);
+}
+
+.slot-upgrade-option.slot-tier-4,
+.slot-upgrade-preview.slot-tier-4 {
+  --slot-frame: #8ff7ff;
+  --slot-glow: rgba(0, 240, 255, 0.34);
+  --slot-wash: rgba(0, 240, 255, 0.14);
+  --slot-sheen: rgba(233, 254, 255, 0.28);
+  box-shadow:
+    0 0 10px rgba(0, 240, 255, 0.2),
+    0 0 16px rgba(185, 0, 255, 0.12);
+}
+
+.slot-upgrade-option.slot-tier-5,
+.slot-upgrade-preview.slot-tier-5 {
+  --slot-frame: #ffffff;
+  --slot-glow: rgba(0, 240, 255, 0.28);
+  --slot-wash: rgba(185, 0, 255, 0.05);
+  --slot-sheen: rgba(255, 255, 255, 0.18);
+  border: 2px solid transparent;
+  background:
+    linear-gradient(115deg, rgba(185, 0, 255, 0.05), rgba(0, 240, 255, 0.04) 48%, rgba(255, 209, 102, 0.035)) padding-box,
+    linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
+    conic-gradient(from 130deg, #00f0ff, #b900ff, #ffd166, #00ff66, #00f0ff) border-box;
+  box-shadow:
+    0 0 10px rgba(0, 240, 255, 0.18),
+    0 0 16px rgba(185, 0, 255, 0.14);
+}
+
+.slot-upgrade-preview {
+  padding: 12px;
+}
+
+.slot-upgrade-bg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: rgba(224, 242, 254, 0.16);
+  background: rgba(4, 13, 20, 0.58);
+  font-size: 24px;
+  line-height: 1;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.slot-upgrade-top,
+.slot-upgrade-tier {
+  position: relative;
+  z-index: 1;
+}
+
+.slot-upgrade-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.slot-upgrade-top strong {
+  color: var(--success);
+  font-weight: normal;
+}
+
+.slot-upgrade-tier {
+  margin-top: 13px;
+  color: var(--primary);
+  font-size: 22px;
+  text-shadow: 0 0 6px rgba(0, 240, 255, 0.34);
+}
+
+.slot-upgrade-compare {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.slot-upgrade-arrow {
+  color: var(--secondary);
+  font-size: 28px;
+  line-height: 1;
+  text-align: center;
+  text-shadow: 0 0 7px rgba(185, 0, 255, 0.35);
+}
+
+.slot-upgrade-max {
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 12px;
+  text-align: center;
+  background: rgba(4, 13, 20, 0.46);
 }
 
 .toast {

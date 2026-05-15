@@ -167,23 +167,23 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
 - `Tab Multiplier`
   - Increases domain income while the domain is contributing live income
   - Infinite levels
-  - Growth rate: `1.6x`
+  - Cost: base `$35`, growth `1.5x`
 - `Focus Bonus`
   - Extra multiplier when the domain is the active foreground domain
   - Infinite levels
-  - Growth rate: `1.55x`
+  - Cost: base `$25`, growth `1.3x`
 - `Navigation Bonus`
   - Grants a bonus payout for qualifying top-level in-domain navigations
   - Trigger: top-level navigation within the same slotted domain
-  - Cooldown: `15` seconds per domain
+  - Cooldown: `1` minute per domain
   - Same-page navigations can re-trigger after cooldown
-  - Intended value: around `13%` of that domain's Daily First-Open Bonus target value
+  - Intended value: around `7%` of that domain's Daily First-Open Bonus target value
   - Infinite levels
-  - Growth rate: `1.6x`
+  - Cost: base `$100`, growth `1.65x`
 - `Traffic Engine`
   - Increases the domain's base income before active, background, navigation, and wake calculations
   - Infinite levels
-  - Growth rate: `1.5x`
+  - Cost: base `$25`, growth `1.4x`
   - Effect scales domain base rate by `1.18x` per level
 
 #### Category B: Vault and Passive Storage
@@ -191,34 +191,35 @@ Each domain has its own upgrade tree. Upgrades are purchased with `$` and do not
 - `Cold Storage`
   - Increases vault cap
   - Infinite levels
-  - Growth rate: `1.55x`
+  - Cost: base `$100`, growth `1.6x`
   - Effect scales vault cap by `1.32x` per level from the base cap
 - `Vault Pump`
   - Increases the rate that vault value accumulates
   - Uses the internal upgrade id `storageDuration` for save compatibility
   - Infinite levels
-  - Growth rate: `1.55x`
+  - Cost: base `$100`, growth `1.6x`
   - Effect scales vault fill rate by `1.3x` per level
 - `Daily Boot`
-  - Increases the value of each daily streak day for that domain
+  - Increases the daily first-open reward and makes each streak day more valuable for that domain
   - Uses the internal upgrade id `dailyBoot`
   - Infinite levels
-  - Growth rate: `1.6x`
+  - Cost: base `$50`, growth `1.35x`
 
 #### Category C: Background Behavior
 
 - `Background Hum`
   - Lets a domain earn a percentage of active income while background-open
   - Infinite levels
-  - Growth rate: `1.55x`
+  - Cost: base `$150`, growth `1.8x`
 - `Idle Depth`
   - Increases background income the longer the domain remains backgrounded
   - Infinite levels
-  - Growth rate: `1.75x`
+  - Cost: base `$150`, growth `1.8x`
 - `Wake Bonus`
   - Grants a burst when a background domain becomes active again
+  - Cooldown: `1` minute per domain
   - Infinite levels
-  - Growth rate: `1.6x`
+  - Cost: base `$75`, growth `1.4x`
 
 ### 3.2 Slot Prestige Upgrades
 
@@ -238,7 +239,7 @@ For slots 4 and higher, the CP cost of each tier scales by slot index:
 
 ```txt
 slot_tier_cost(slot_id, tier) =
-  ceil(base_tier_cost(tier) x 1.5^(max(0, slot_id - 3)))
+  ceil(base_tier_cost(tier) x 5.0^(max(0, slot_id - 3)))
 ```
 
 Buying Tier I or higher on slot 4+ permanently preserves that slot unlock through future Clear Cache resets.
@@ -294,7 +295,7 @@ Where:
 
 ```txt
 domain_base_rate =
-  BASE_RATE x cache_core_multiplier x 1.2^traffic_engine_level
+  BASE_RATE x cache_core_multiplier x 1.18^traffic_engine_level
 ```
 
 Where `state_bonus` is exactly one of:
@@ -316,15 +317,15 @@ payout =
 `Navigation Bonus` is a lightweight active-use reward, not a primary income engine.
 
 - Trigger: top-level in-domain navigation only
-- Cooldown: `15` seconds per domain
+- Cooldown: `1` minute per domain
 - Same-page navigations can re-trigger after cooldown
 - Scope: slotted domains only
-- Target tuning: one navigation payout should be about `13%` of that domain's Daily First-Open Bonus target value
+- Target tuning: one navigation payout should be about `7%` of that domain's Daily First-Open Bonus target value
 
 ```txt
 navigation_payout =
   daily_first_open_bonus(entry, slot)
-  x 0.13
+  x 0.07
   x (1 + 0.18 x navigation_bonus_level)
 ```
 
@@ -334,13 +335,14 @@ Level `0` disables the payout. Once at least one level is purchased, the payout 
 
 - Daily reset occurs at **midnight in the player's local time**
 - Daily bonuses and swap cooldowns both use local-date boundaries
-- The incoming domain on a library-to-slot swap cannot claim a daily bonus on the day it was inserted
+- The Daily First-Open bonus pays automatically the first time a slotted domain becomes focused/open that day, even if the popup is closed
+- The incoming domain on a library-to-slot swap cannot earn a daily bonus on the day it was inserted
 
 ### 4.5 Streak Rules
 
 Each currently slotted domain has its own streak.
 
-- Claiming the daily bonus on consecutive days increases that domain's streak
+- First-opening the domain on consecutive days increases that domain's streak
 - Missing a day resets that domain's streak
 - Fully unslotting a domain resets that domain's streak
 - Moving a domain between two active slots preserves its streak
@@ -352,8 +354,8 @@ Each currently slotted domain has its own streak.
 ```txt
 daily_first_open_bonus =
   max(20, domain_base_rate x 60 x 35)
-  x (1 + 0.18 x daily_boot_level^0.95)
-  x (1 + min(current_streak, 14) x 0.04)
+  x (1 + 0.18 x daily_boot_level)
+  x (1 + min(current_streak, 14) x 0.05 + daily_boot_level x min(current_streak, 14) x 0.01)
   x (1 + 0.15 x slot_streak_bonus_tier)
 ```
 
@@ -368,7 +370,7 @@ Prestige is called **Clear Cache**. It resets run-level progression in exchange 
 - `$` balance
 - Domain upgrade levels
 - Vault amounts
-- Daily claim availability
+- Daily First-Open availability
 - Domain streak states
 - Run-level progression tempo
 
@@ -590,18 +592,18 @@ total_cost_to_buy_n_levels =
   base_cost x (growth_rate^N - 1) / (growth_rate - 1)
 ```
 
-Initial tuning targets:
+Current tuning targets:
 
-- Tab Multiplier: base `$35`, growth `1.45`
-- Focus Bonus: base `$25`, growth `1.4`
-- Navigation Bonus: base `$60`, growth `1.45`
-- Cold Storage: base `$50`, growth `1.55`
-- Vault Pump: base `$60`, growth `1.55`
+- Tab Multiplier: base `$35`, growth `1.5`
+- Focus Bonus: base `$25`, growth `1.3`
+- Navigation Bonus: base `$100`, growth `1.65`
+- Cold Storage: base `$100`, growth `1.6`
+- Vault Pump: base `$100`, growth `1.6`
 - Traffic Engine: base `$25`, growth `1.4`
-- Daily Boot: base `$50`, growth `1.4`
-- Background Hum: base `$80`, growth `1.55`
-- Idle Depth: base `$100`, growth `1.55`
-- Wake Bonus: base `$125`, growth `1.45`
+- Daily Boot: base `$50`, growth `1.35`
+- Background Hum: base `$150`, growth `1.8`
+- Idle Depth: base `$150`, growth `1.8`
+- Wake Bonus: base `$75`, growth `1.4`
 
 The implementation source of truth for these values is `UPGRADE_DEFS` in `v1/game-math.js`.
 
@@ -613,7 +615,7 @@ tab_multiplier_bonus(level) = 1 + (0.15 x level)
 focus_bonus(level) = 1 + (0.35 x level) + (0.01 x level^1.2)
 navigation_payout(level) =
   daily_first_open_bonus
-  x 0.13
+  x 0.07
   x (1 + 0.18 x navigation_bonus_level)
 
 traffic_scale = sqrt(domain_base_rate / BASE_RATE)
@@ -631,8 +633,8 @@ background_income =
 
 daily_first_open_bonus =
   max(20, domain_base_rate x 60 x 35)
-  x (1 + 0.18 x daily_boot_level^0.95)
-  x (1 + min(current_streak, 14) x 0.04)
+  x (1 + 0.18 x daily_boot_level)
+  x (1 + min(current_streak, 14) x 0.05 + daily_boot_level x min(current_streak, 14) x 0.01)
   x (1 + 0.15 x slot_streak_bonus_tier)
 
 wake_bonus(lvl) = domain_base_rate x 65 x lvl^1.1 x slot_tier_bonus
@@ -793,7 +795,7 @@ Retro tech workshop / browser-operations pixel-art presentation:
 ### 11.1 Offline Accrual
 
 - Close Chrome for several hours and verify vaults settle exactly once up to cap
-- Cross midnight while Chrome is closed and verify daily claim readiness resets correctly
+- Cross midnight while Chrome is closed and verify Daily First-Open can trigger on the next focused/open event
 
 ### 11.2 Domain Contribution
 
@@ -808,7 +810,7 @@ Retro tech workshop / browser-operations pixel-art presentation:
 
 ### 11.4 Streak Behavior
 
-- Claim on consecutive days and verify streak growth
+- First-open on consecutive days and verify streak growth
 - Miss a day and verify streak reset
 - Fully unslot a domain and verify streak reset
 - Move a domain between two slots and verify streak preservation
@@ -823,7 +825,6 @@ Retro tech workshop / browser-operations pixel-art presentation:
 The following remain intentionally open for later balancing or implementation detail:
 
 - exact weekly milestone bonus amount
-- exact global upgrade list and values
 - exact domain presence snapshot schema
-- final balancing constants for `Navigation Bonus` and `Daily First-Open`
 - final icon-to-upgrade semantic mapping
+- post-playtest tuning for current upgrade costs and reward constants
