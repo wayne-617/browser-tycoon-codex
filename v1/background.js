@@ -1,10 +1,11 @@
-importScripts("game-math.js");
+importScripts("ExtPay.js", "game-math.js");
 
 const {
   SCI_ZERO,
   UPGRADE_DEFS,
   SLOT_TIERS,
   SLOT_PRESTIGE_COST_SCALE,
+  SUPPORTER_CORE_MULTIPLIER,
   emptyUpgrades,
   toSci,
   sciToNumber,
@@ -26,11 +27,27 @@ const {
   wakeBurstForLevel
 } = BrowserTycoonMath;
 
+const EXTPAY_EXTENSION_ID = "browser-tycoon";
+const SUPPORTER_CORE_PLAN = "supporter-core";
+const PREMIUM_STATUS_MAX_AGE_MS = 10 * 60 * 1000;
 const ALARM_NAME = "browser-tycoon-accrual";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
 const WELCOME_BACK_MIN_SECONDS = 60;
 const EVENT_BONUS_COOLDOWN_MS = 60 * 1000;
-const TODAY = () => new Date().toLocaleDateString("en-CA");
+const ONBOARDING_STARTER_CASH = 1000;
+
+function makeExtPay() {
+  return typeof ExtPay === "function" ? ExtPay(EXTPAY_EXTENSION_ID) : null;
+}
+
+const extpay = makeExtPay();
+if (extpay?.startBackground) extpay.startBackground();
+
+function localDateKey(time = Date.now()) {
+  return new Date(time).toLocaleDateString("en-CA");
+}
+
+const TODAY = () => localDateKey();
 
 function normalizeCurrencyState(sync, local) {
   sync.balance = toSci(sync.balance);
@@ -51,6 +68,8 @@ function defaultSyncState() {
     unlockedSlots: 3,
     prestigeCount: 0,
     onboardingComplete: false,
+    onboardingStep: "intro",
+    onboardingStarterCashClaimed: false,
     slots: [1, 2, 3].map((id) => ({
       id,
       tier: 0,
@@ -66,6 +85,13 @@ function defaultLocalState() {
   return {
     domainLibrary: {},
     presence: {},
+    premiumStatus: {
+      supporterCorePaid: false,
+      email: null,
+      paidAt: null,
+      checkedAt: 0,
+      error: null
+    },
     lastAccrualAt: Date.now(),
     lastNavigationBonusAt: {},
     lastWakeBonusAt: {},
@@ -109,12 +135,15 @@ async function saveState(sync, local) {
       unlockedSlots: sync.unlockedSlots,
       prestigeCount: sync.prestigeCount,
       onboardingComplete: sync.onboardingComplete,
+      onboardingStep: sync.onboardingStep,
+      onboardingStarterCashClaimed: sync.onboardingStarterCashClaimed,
       slots: sync.slots,
       compactDomains: sync.compactDomains
     }),
     chrome.storage.local.set({
       domainLibrary: local.domainLibrary,
       presence: local.presence,
+      premiumStatus: local.premiumStatus,
       lastAccrualAt: local.lastAccrualAt,
       lastNavigationBonusAt: local.lastNavigationBonusAt,
       lastWakeBonusAt: local.lastWakeBonusAt,
@@ -123,6 +152,27 @@ async function saveState(sync, local) {
       pendingWelcomeBack: local.pendingWelcomeBack
     })
   ]);
+}
+
+async function saveOnboardingState(sync, complete, step, { grantStarterCash = false } = {}) {
+  const nextComplete = Boolean(complete);
+  const nextStep = step || (nextComplete ? "complete" : "intro");
+  const shouldGrantStarterCash = grantStarterCash && !sync.onboardingStarterCashClaimed;
+  if (sync.onboardingComplete === nextComplete && sync.onboardingStep === nextStep && !shouldGrantStarterCash) {
+    return;
+  }
+  sync.onboardingComplete = nextComplete;
+  sync.onboardingStep = nextStep;
+  if (shouldGrantStarterCash) {
+    sync.balance = sciAdd(sync.balance, ONBOARDING_STARTER_CASH);
+    sync.onboardingStarterCashClaimed = true;
+  }
+  await chrome.storage.sync.set({
+    balance: sync.balance,
+    onboardingComplete: sync.onboardingComplete,
+    onboardingStep: sync.onboardingStep,
+    onboardingStarterCashClaimed: sync.onboardingStarterCashClaimed
+  });
 }
 
 function normalizeSlots(slots, unlockedSlots) {
@@ -164,6 +214,65 @@ function normalizeDomainInput(input) {
   }
 }
 
+// Tracks whether the extension popup is currently open and which normal window
+// was focused when it opened. This lets getEligibleFocusedWindow() keep counting
+// that window as eligible while the popup is in the foreground.
+let popupOpen = false;
+let popupAnchorWindowId = null;
+let popupAnchorReady = Promise.resolve();
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "popup") return;
+  popupOpen = true;
+  // Capture the focused normal window at the moment the popup opens.
+  popupAnchorReady = chrome.windows.getLastFocused().then((win) => {
+    if (win && win.type === "normal" && win.state !== "minimized") {
+      popupAnchorWindowId = win.id;
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    popupOpen = false;
+    popupAnchorWindowId = null;
+    popupAnchorReady = Promise.resolve();
+    settleAndSave();
+  });
+});
+
+async function getEligibleFocusedWindow() {
+  try {
+    const focused = await chrome.windows.getLastFocused();
+    // Normal case: a real browser window has OS focus.
+    if (focused && focused.focused === true && focused.type === "normal" && focused.state !== "minimized") {
+      return focused;
+    }
+    // Popup case: the extension popup has OS focus.
+    if (popupOpen) {
+      await popupAnchorReady;
+      if (popupAnchorWindowId != null) {
+        try {
+          const win = await chrome.windows.get(popupAnchorWindowId);
+          if (win && win.type === "normal" && win.state !== "minimized") {
+            return win;
+          }
+        } catch {
+          // Anchor window was closed.
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function activeTabInEligibleWindow() {
+  const win = await getEligibleFocusedWindow();
+  if (!win) return null;
+  const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
+  if (!tab || tab.incognito) return null;
+  return tab;
+}
+
 function getDomainEntry(local, domain) {
   if (!local.domainLibrary[domain]) {
     local.domainLibrary[domain] = {
@@ -193,21 +302,81 @@ function entryVisitDate(entry) {
   return entry?.lastVisited ? new Date(entry.lastVisited).toLocaleDateString("en-CA") : null;
 }
 
+function supporterCoreMultiplier(local) {
+  return local?.premiumStatus?.supporterCorePaid ? SUPPORTER_CORE_MULTIPLIER : 1;
+}
+
+function normalizePremiumStatus(local) {
+  local.premiumStatus = {
+    ...defaultLocalState().premiumStatus,
+    ...(local.premiumStatus || {})
+  };
+  return local.premiumStatus;
+}
+
+async function refreshPremiumStatus(local, { force = false } = {}) {
+  const status = normalizePremiumStatus(local);
+  const fresh = Date.now() - Number(status.checkedAt || 0) < PREMIUM_STATUS_MAX_AGE_MS;
+  if (!force && fresh && status.supporterCorePaid) return status;
+  const currentExtPay = makeExtPay();
+  if (!currentExtPay?.getUser) {
+    local.premiumStatus = {
+      ...status,
+      supporterCorePaid: false,
+      checkedAt: Date.now(),
+      error: "ExtensionPay is not available."
+    };
+    return local.premiumStatus;
+  }
+  try {
+    const user = await currentExtPay.getUser();
+    const planNickname = user?.plan?.nickname || null;
+    const paid = Boolean(user?.paid || user?.paidAt);
+    const hasSupporterCore = Boolean(paid && (!planNickname || planNickname === SUPPORTER_CORE_PLAN));
+    local.premiumStatus = {
+      supporterCorePaid: hasSupporterCore,
+      email: user?.email || null,
+      paidAt: user?.paidAt ? user.paidAt.getTime() : null,
+      checkedAt: Date.now(),
+      error: null
+    };
+  } catch (error) {
+    local.premiumStatus = {
+      ...status,
+      checkedAt: Date.now(),
+      error: error?.message || "Could not check premium status."
+    };
+  }
+  return local.premiumStatus;
+}
+
 function recordFocusedVisit(entry, now = Date.now()) {
-  const today = TODAY();
+  const today = localDateKey(now);
   const previousVisitDate = entryVisitDate(entry);
   if (previousVisitDate === today) {
     entry.lastVisited = now;
     return false;
   }
-  const yesterday = new Date(now - 86400000).toLocaleDateString("en-CA");
+  const yesterday = localDateKey(now - 86400000);
   entry.currentStreak = previousVisitDate === yesterday ? entry.currentStreak + 1 : 1;
   entry.lastVisited = now;
   return true;
 }
 
-function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0) {
-  const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry, undefined, cacheCoreLevel));
+function normalizeSlottedDomainProgress(entry, cap, now = Date.now()) {
+  if (sciCompare(entry.vaultAmount, cap) > 0) {
+    entry.vaultAmount = toSci(cap);
+  }
+  if (Number(entry.currentStreak || 0) <= 0) return;
+  const visitDate = entryVisitDate(entry);
+  const yesterday = localDateKey(now - 86400000);
+  if (!visitDate || visitDate < yesterday) {
+    entry.currentStreak = 0;
+  }
+}
+
+function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0, premiumMultiplier = 1) {
+  const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry, undefined, cacheCoreLevel, premiumMultiplier));
   return {
     vault: stored,
     daily: 0,
@@ -258,31 +427,35 @@ function recordWelcomeBackAccrual(local, state, amount, now) {
   recordWelcomeBackAward(local, state === "active" ? "focus" : "background", amount, now);
 }
 
-function assignWelcomeBackRemainder(sync, local, award, remainder) {
-  if (sciCompare(remainder, 0) <= 0) return;
-  const weightedBuckets = { focus: 0, background: 0 };
-  const now = Date.now();
-  for (const slot of sync.slots) {
-    if (!slot.assignedDomain) continue;
-    const domain = slot.assignedDomain;
-    const presence = local.presence[domain];
-    if (!["active", "background"].includes(presence?.state)) continue;
-    const entry = getDomainEntry(local, domain);
-    const rate = domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel);
-    if (!Number.isFinite(rate) || rate <= 0) continue;
-    const bucket = presence.state === "active" ? "focus" : "background";
-    weightedBuckets[bucket] += rate;
+function welcomeBackAllBucketTotal(award) {
+  return ["focus", "background", "daily", "navigation", "wake", "other"].reduce(
+    (total, key) => sciAdd(total, award?.[key] || SCI_ZERO),
+    SCI_ZERO
+  );
+}
+
+function scaleWelcomeBackBucketsToTotal(award, total) {
+  const bucketKeys = ["focus", "background", "daily", "navigation", "wake", "other"];
+  const bucketTotal = welcomeBackAllBucketTotal(award);
+  if (sciCompare(bucketTotal, 0) <= 0) {
+    award.other = total;
+    award.total = total;
+    return award;
   }
-  const totalWeight = weightedBuckets.focus + weightedBuckets.background;
-  if (totalWeight <= 0) {
+  if (sciCompare(bucketTotal, total) <= 0) {
+    const remainder = sciSub(total, bucketTotal);
     award.other = sciAdd(award.other || SCI_ZERO, remainder);
-    return;
+    award.total = total;
+    return award;
   }
-  const remainderNumber = sciToNumber(remainder);
-  for (const [bucket, weight] of Object.entries(weightedBuckets)) {
-    if (weight <= 0) continue;
-    award[bucket] = sciAdd(award[bucket] || SCI_ZERO, remainderNumber * (weight / totalWeight));
+  const scale = sciToNumber(total) / sciToNumber(bucketTotal);
+  for (const key of bucketKeys) {
+    award[key] = sciToNumber(award[key] || SCI_ZERO) > 0
+      ? sciAdd(0, sciToNumber(award[key]) * scale)
+      : { ...SCI_ZERO };
   }
+  award.total = total;
+  return award;
 }
 
 function recordFocusedVisitAndDaily(sync, local, entry, slot, now = Date.now()) {
@@ -290,7 +463,7 @@ function recordFocusedVisitAndDaily(sync, local, entry, slot, now = Date.now()) 
   const isFirstVisitToday = recordFocusedVisit(entry, now);
   if (!isFirstVisitToday) return 0;
   if (!slot || entry.dailyBonusClaimedDate === today || entry.insertedOnDate === today) return 0;
-  const amount = dailyFirstOpenBonus(entry, slot, sync.cacheCoreLevel);
+  const amount = dailyFirstOpenBonus(entry, slot, sync.cacheCoreLevel, supporterCoreMultiplier(local));
   entry.dailyBonusClaimedDate = today;
   addEarnings(sync, entry, amount);
   recordWelcomeBackAward(local, "daily", amount, now);
@@ -302,7 +475,7 @@ function recordForegroundDomainEvent(sync, local, domain, slot, now = Date.now()
   const entry = getDomainEntry(local, domain);
   const lastWake = local.lastWakeBonusAt[domain] || 0;
   if (old?.state === "background" && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
-    const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel);
+    const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel, supporterCoreMultiplier(local));
     addEarnings(sync, entry, amount);
     recordWelcomeBackAward(local, "wake", amount, now);
     local.lastWakeBonusAt[domain] = now;
@@ -312,59 +485,37 @@ function recordForegroundDomainEvent(sync, local, domain, slot, now = Date.now()
     state: "active",
     openCount: Math.max(1, Number(old?.openCount || 0)),
     backgroundSince: null,
+    windowId: old?.windowId || null,
     updatedAt: now
   };
 }
 
-function welcomeBackEstimate(sync, local, from, to) {
-  const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (to - from) / 1000));
-  const estimate = createWelcomeBackAward({ ...local, lastPopupSeenAt: to - elapsedSeconds * 1000 }, to);
-  estimate.seconds = Math.floor(elapsedSeconds);
-  if (elapsedSeconds <= 0) return estimate;
-  for (const slot of sync.slots) {
-    if (!slot.assignedDomain) continue;
-    const domain = slot.assignedDomain;
-    const entry = getDomainEntry(local, domain);
-    const presence = local.presence[domain];
-    if (!presence) continue;
-    const state = presence.state;
-    if (!["active", "background"].includes(state)) continue;
-    const rate = domainIncomeForState(entry, slot, presence, to, sync.cacheCoreLevel);
-    const amount = Number.isFinite(rate) ? rate * elapsedSeconds : 0;
-    if (amount <= 0) continue;
-    const bucket = state === "active" ? "focus" : "background";
-    estimate[bucket] = sciAdd(estimate[bucket], amount);
-    estimate.total = sciAdd(estimate.total, amount);
-  }
-  return estimate;
-}
-
 function updateWelcomeBack(sync, local, now = Date.now()) {
+  const lastSeen = Number(local.lastPopupSeenAt || 0);
+  const lastBalance = local.lastPopupBalance ? toSci(local.lastPopupBalance) : null;
+  const elapsedSeconds = (now - lastSeen) / 1000;
+
   if (local.pendingWelcomeBack && sciCompare(local.pendingWelcomeBack.total, 0) > 0) {
-    const lastSeen = Number(local.lastPopupSeenAt || 0);
-    if (local.lastPopupBalance) {
-      const actualTotal = sciSub(sync.balance, local.lastPopupBalance);
-      const knownTotal = welcomeBackKnownTotal(local.pendingWelcomeBack);
-      assignWelcomeBackRemainder(sync, local, local.pendingWelcomeBack, sciSub(actualTotal, knownTotal));
-      const updatedKnownTotal = welcomeBackKnownTotal(local.pendingWelcomeBack);
-      const other = sciSub(actualTotal, updatedKnownTotal);
-      local.pendingWelcomeBack.other = sciCompare(other, 0) > 0 ? other : { ...SCI_ZERO };
-      if (sciCompare(actualTotal, local.pendingWelcomeBack.total) > 0) {
-        local.pendingWelcomeBack.total = actualTotal;
+    if (lastBalance) {
+      const actualTotal = sciSub(sync.balance, lastBalance);
+      if (sciCompare(actualTotal, 0) <= 0) {
+        local.pendingWelcomeBack = null;
+        local.lastPopupSeenAt = now;
+        local.lastPopupBalance = sync.balance;
+        return null;
       }
+      scaleWelcomeBackBucketsToTotal(local.pendingWelcomeBack, actualTotal);
     }
     if (lastSeen) local.pendingWelcomeBack.seconds = Math.floor((now - lastSeen) / 1000);
     local.lastPopupSeenAt = now;
     return local.pendingWelcomeBack;
   }
-  const lastSeen = Number(local.lastPopupSeenAt || 0);
-  const lastBalance = local.lastPopupBalance ? toSci(local.lastPopupBalance) : null;
+
   local.lastPopupSeenAt = now;
   if (!lastSeen || !lastBalance) {
     local.lastPopupBalance = sync.balance;
     return null;
   }
-  const elapsedSeconds = (now - lastSeen) / 1000;
   if (elapsedSeconds < WELCOME_BACK_MIN_SECONDS) {
     local.lastPopupBalance = sync.balance;
     return null;
@@ -374,57 +525,65 @@ function updateWelcomeBack(sync, local, now = Date.now()) {
     local.lastPopupBalance = sync.balance;
     return null;
   }
-  const estimate = welcomeBackEstimate(sync, local, lastSeen, now);
-  const knownTotal = welcomeBackKnownTotal(estimate);
-  assignWelcomeBackRemainder(sync, local, estimate, sciSub(actualTotal, knownTotal));
-  const updatedKnownTotal = welcomeBackKnownTotal(estimate);
-  const other = sciSub(actualTotal, updatedKnownTotal);
-  estimate.other = sciCompare(other, 0) > 0 ? other : { ...SCI_ZERO };
-  estimate.total = actualTotal;
-  local.pendingWelcomeBack = estimate;
-  return estimate;
+
+  const award = createWelcomeBackAward({ ...local, lastPopupSeenAt: lastSeen }, now);
+  award.seconds = Math.floor(elapsedSeconds);
+  award.other = actualTotal;
+  award.total = actualTotal;
+  local.pendingWelcomeBack = award;
+  return award;
 }
 
-function settleAccrual(sync, local, now = Date.now()) {
+function isLivePresenceEligible(presence, eligibleWindow) {
+  if (!["active", "background"].includes(presence?.state)) return false;
+  if (!eligibleWindow) return false;
+  return Number(presence.windowId) === Number(eligibleWindow.id);
+}
+
+function settleAccrual(sync, local, now = Date.now(), eligibleWindow = null) {
   const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (now - (local.lastAccrualAt || now)) / 1000));
-  if (elapsedSeconds <= 0) {
-    local.lastAccrualAt = now;
-    return;
-  }
   for (const slot of sync.slots) {
     if (!slot.assignedDomain) continue;
     const entry = getDomainEntry(local, slot.assignedDomain);
+    const premiumMultiplier = supporterCoreMultiplier(local);
+    const cap = vaultCap(entry, undefined, sync.cacheCoreLevel, premiumMultiplier);
+    normalizeSlottedDomainProgress(entry, cap, now);
+    if (elapsedSeconds <= 0) continue;
     const presence = local.presence[slot.assignedDomain];
-    const liveRate = domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel);
+    const liveStateEligible = isLivePresenceEligible(presence, eligibleWindow);
+    const liveRate = liveStateEligible ? domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel, premiumMultiplier) : 0;
     const liveGain = liveRate * elapsedSeconds;
     addEarnings(sync, entry, liveGain);
-    recordWelcomeBackAccrual(local, presence?.state, liveGain, now);
-    const cap = vaultCap(entry, undefined, sync.cacheCoreLevel);
+    if (liveStateEligible) recordWelcomeBackAccrual(local, presence?.state, liveGain, now);
     const currentVault = sciToNumber(entry.vaultAmount);
-    const vaultGain = Math.min(cap - currentVault, vaultRate(entry, undefined, sync.cacheCoreLevel) * elapsedSeconds);
+    const vaultGain = Math.min(cap - currentVault, vaultRate(entry, undefined, sync.cacheCoreLevel, premiumMultiplier) * elapsedSeconds);
     if (vaultGain > 0) {
       entry.vaultAmount = sciAdd(entry.vaultAmount, vaultGain);
+      if (sciCompare(entry.vaultAmount, cap) > 0) entry.vaultAmount = toSci(cap);
       entry.vaultLastTickTime = now;
     }
   }
   local.lastAccrualAt = now;
 }
 
-async function rebuildPresence(sync, local) {
-  const [tabs, activeTabs] = await Promise.all([
-    chrome.tabs.query({}),
-    chrome.tabs.query({ active: true, lastFocusedWindow: true })
-  ]);
-  const foregroundDomain = normalizeDomainFromUrl(activeTabs[0]?.url);
+async function rebuildPresence(sync, local, eligibleWindow = null) {
+  const win = eligibleWindow || await getEligibleFocusedWindow();
+  const tabs = win ? await chrome.tabs.query({ windowId: win.id }) : [];
+  const activeTab = tabs.find((tab) => tab.active && !tab.incognito);
+  const foregroundDomain = normalizeDomainFromUrl(activeTab?.url);
   const domains = {};
-  for (const tab of tabs) {
-    if (tab.incognito) continue;
-    const domain = normalizeDomainFromUrl(tab.url);
-    if (!domain) continue;
-    domains[domain] ||= { openCount: 0, active: false };
-    domains[domain].openCount += 1;
-    if (domain === foregroundDomain) domains[domain].active = true;
+
+  if (win) {
+    for (const tab of tabs) {
+      if (tab.incognito) continue;
+      const domain = normalizeDomainFromUrl(tab.url);
+      if (!domain) continue;
+      domains[domain] ||= { openCount: 0, active: false };
+      domains[domain].openCount += 1;
+      if (tab.active && domain === foregroundDomain) domains[domain].active = true;
+    }
   }
+
   const slotted = new Set(sync.slots.map((slot) => slot.assignedDomain).filter(Boolean));
   const now = Date.now();
   const next = {};
@@ -435,10 +594,12 @@ async function rebuildPresence(sync, local) {
     let state = "closed";
     if (seen?.active) state = "active";
     else if (seen?.openCount > 0) state = "background";
+
+    const sameEligibleWindow = win && Number(old?.windowId) === Number(win.id);
     const lastWake = local.lastWakeBonusAt[domain] || 0;
-    if (old?.state === "background" && state === "active" && slot && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
+    if (sameEligibleWindow && old?.state === "background" && state === "active" && slot && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
       const entry = getDomainEntry(local, domain);
-      const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel);
+      const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel, supporterCoreMultiplier(local));
       addEarnings(sync, entry, amount);
       recordWelcomeBackAward(local, "wake", amount, now);
       local.lastWakeBonusAt[domain] = now;
@@ -447,7 +608,8 @@ async function rebuildPresence(sync, local) {
     next[domain] = {
       state,
       openCount: seen?.openCount || 0,
-      backgroundSince: state === "background" ? old?.backgroundSince || now : null,
+      backgroundSince: state === "background" ? (sameEligibleWindow ? old?.backgroundSince || now : now) : null,
+      windowId: ["active", "background"].includes(state) ? win.id : null,
       updatedAt: now
     };
   }
@@ -456,8 +618,9 @@ async function rebuildPresence(sync, local) {
 
 async function settleAndSave({ rebuild = true } = {}) {
   const { sync, local } = await getState();
-  settleAccrual(sync, local);
-  if (rebuild) await rebuildPresence(sync, local);
+  const eligibleWindow = await getEligibleFocusedWindow();
+  settleAccrual(sync, local, Date.now(), eligibleWindow);
+  if (rebuild) await rebuildPresence(sync, local, eligibleWindow);
   await saveState(sync, local);
   await updateBadge(sync);
   return { sync, local };
@@ -465,7 +628,8 @@ async function settleAndSave({ rebuild = true } = {}) {
 
 async function updateBadge(sync) {
   const local = await chrome.storage.local.get(defaultLocalState());
-  const cps = Math.max(0, Math.floor(currentIncomePerSecond(sync, local.domainLibrary || {}, local.presence || {})));
+  normalizePremiumStatus(local);
+  const cps = Math.max(0, Math.floor(currentIncomePerSecond(sync, local.domainLibrary || {}, local.presence || {}, supporterCoreMultiplier(local))));
   await chrome.action.setBadgeText({ text: formatBadgeIncome(cps) });
 }
 
@@ -483,28 +647,31 @@ function formatBadgeIncome(value) {
   return `${rounded}${suffixes[suffixIndex]}`;
 }
 
-function currentIncomePerSecond(sync, library, presence) {
-  const incomes = currentSlotIncomes(sync, library, presence);
+function currentIncomePerSecond(sync, library, presence, premiumMultiplier = 1) {
+  const incomes = currentSlotIncomes(sync, library, presence, Date.now(), premiumMultiplier);
   return Object.values(incomes).reduce((sum, value) => sum + value, 0);
 }
 
-function currentSlotIncomes(sync, library, presence, now = Date.now()) {
+function currentSlotIncomes(sync, library, presence, now = Date.now(), premiumMultiplier = 1) {
   return sync.slots.reduce((incomes, slot) => {
     if (!slot.assignedDomain) return incomes;
     const domain = slot.assignedDomain;
-    incomes[domain] = domainIncomeForState(library[domain], slot, presence[domain], now, sync.cacheCoreLevel);
+    incomes[domain] = domainIncomeForState(library[domain], slot, presence[domain], now, sync.cacheCoreLevel, premiumMultiplier);
     return incomes;
   }, {});
 }
 
 async function getSnapshot() {
   const { sync, local } = await settleAndSave();
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  await refreshPremiumStatus(local);
+  await saveState(sync, local);
+  const activeTab = await activeTabInEligibleWindow();
   const currentDomain = normalizeDomainFromUrl(activeTab?.url);
   const now = Date.now();
   const welcomeBack = updateWelcomeBack(sync, local, now);
   await saveState(sync, local);
-  const slotIncomes = currentSlotIncomes(sync, local.domainLibrary, local.presence, now);
+  const premiumMultiplier = supporterCoreMultiplier(local);
+  const slotIncomes = currentSlotIncomes(sync, local.domainLibrary, local.presence, now, premiumMultiplier);
   return {
     sync,
     local,
@@ -516,6 +683,16 @@ async function getSnapshot() {
       multiplier: cacheCoreMultiplier(sync.cacheCoreLevel),
       nextMultiplier: cacheCoreMultiplier(sync.cacheCoreLevel + 1),
       nextCost: cacheCoreCost(sync.cacheCoreLevel)
+    },
+    premium: {
+      supporterCorePaid: Boolean(local.premiumStatus?.supporterCorePaid),
+      email: local.premiumStatus?.email || null,
+      checkedAt: Number(local.premiumStatus?.checkedAt || 0),
+      error: local.premiumStatus?.error || null,
+      multiplier: premiumMultiplier,
+      productName: "Supporter Core",
+      price: "$2.99",
+      planNickname: SUPPORTER_CORE_PLAN
     },
     now,
     slotIncomes,
@@ -578,16 +755,19 @@ async function addCurrentSite(slotId) {
 }
 
 async function activeTabDomain() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await activeTabInEligibleWindow();
   return normalizeDomainFromUrl(tab?.url);
 }
 
 async function isForegroundTab(tabId) {
   try {
-    const tab = await chrome.tabs.get(tabId);
-    if (!tab?.active) return false;
-    const window = await chrome.windows.get(tab.windowId);
-    return Boolean(window?.focused);
+    const [tab, win] = await Promise.all([
+      chrome.tabs.get(tabId),
+      getEligibleFocusedWindow()
+    ]);
+    if (!tab?.active || !win) return false;
+    if (tab.incognito) return false;
+    return Number(tab.windowId) === Number(win.id);
   } catch {
     return false;
   }
@@ -660,7 +840,7 @@ async function claimRevisit(domain) {
   const slot = sync.slots.find((item) => item.assignedDomain === domain);
   if (!slot) return { ok: false, error: "Domain is not slotted." };
   const entry = getDomainEntry(local, domain);
-  const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel);
+  const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel, supporterCoreMultiplier(local));
   if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
   entry.vaultAmount = { ...SCI_ZERO };
   addEarnings(sync, entry, payout.total);
@@ -770,44 +950,86 @@ async function devResetLifetime() {
   return { ok: true };
 }
 
+async function openPremiumPayment() {
+  const currentExtPay = makeExtPay();
+  if (!currentExtPay?.openPaymentPage) return { ok: false, error: "ExtensionPay is not available." };
+  await currentExtPay.openPaymentPage(SUPPORTER_CORE_PLAN);
+  return { ok: true };
+}
+
+async function openPremiumLogin() {
+  const currentExtPay = makeExtPay();
+  if (!currentExtPay?.openLoginPage) return { ok: false, error: "ExtensionPay is not available." };
+  await currentExtPay.openLoginPage();
+  return { ok: true };
+}
+
+async function forceRefreshPremiumStatus() {
+  const { sync, local } = await getState();
+  const status = await refreshPremiumStatus(local, { force: true });
+  await saveState(sync, local);
+  return {
+    ok: true,
+    paid: Boolean(status.supporterCorePaid),
+    error: status.error || null
+  };
+}
+
 async function navigationBonus(details) {
   if (details.frameId !== 0) return;
   const domain = normalizeDomainFromUrl(details.url);
   if (!domain) return;
   const isForeground = await isForegroundTab(details.tabId);
+  const eligibleWindow = await getEligibleFocusedWindow();
   const { sync, local } = await getState();
-  settleAccrual(sync, local);
+  settleAccrual(sync, local, Date.now(), eligibleWindow);
   const slot = sync.slots.find((item) => item.assignedDomain === domain);
   if (!slot) {
-    await rebuildPresence(sync, local);
+    await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
     await updateBadge(sync);
     return;
   }
   const now = Date.now();
+  if (!isForeground) {
+    await rebuildPresence(sync, local, eligibleWindow);
+    await saveState(sync, local);
+    await updateBadge(sync);
+    return;
+  }
   if (isForeground) recordForegroundDomainEvent(sync, local, domain, slot, now);
   const entry = getDomainEntry(local, domain);
   const level = getUpgradeLevel(entry, "navigationBonus");
   if (level <= 0) {
-    await rebuildPresence(sync, local);
+    await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
     await updateBadge(sync);
     return;
   }
   const last = local.lastNavigationBonusAt[domain] || 0;
   if (now - last < EVENT_BONUS_COOLDOWN_MS) {
-    await rebuildPresence(sync, local);
+    await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
     await updateBadge(sync);
     return;
   }
-  const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel);
+  const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel, supporterCoreMultiplier(local));
   local.lastNavigationBonusAt[domain] = now;
   addEarnings(sync, entry, amount);
   recordWelcomeBackAward(local, "navigation", amount, now);
-  await rebuildPresence(sync, local);
+  await rebuildPresence(sync, local, eligibleWindow);
   await saveState(sync, local);
   await updateBadge(sync);
+}
+
+let pendingSettleTimer = null;
+
+function scheduleSettle(delay = 0) {
+  if (pendingSettleTimer) clearTimeout(pendingSettleTimer);
+  pendingSettleTimer = setTimeout(() => {
+    pendingSettleTimer = null;
+    settleAndSave();
+  }, delay);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -824,6 +1046,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.status === "complete") settleAndSave();
 });
 chrome.tabs.onRemoved.addListener(() => settleAndSave());
+chrome.windows.onFocusChanged.addListener(() => settleAndSave());
+chrome.windows.onRemoved.addListener(() => settleAndSave());
+chrome.windows.onBoundsChanged.addListener(() => scheduleSettle(250));
 chrome.webNavigation.onCommitted.addListener(navigationBonus);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -853,16 +1078,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "devAddCachePoints") return devAddCachePoints(message.amount);
       if (message.type === "devResetCashAndCachePoints") return devResetCashAndCachePoints();
       if (message.type === "devResetLifetime") return devResetLifetime();
+      if (message.type === "openPremiumPayment") return openPremiumPayment();
+      if (message.type === "openPremiumLogin") return openPremiumLogin();
+      if (message.type === "refreshPremiumStatus") return forceRefreshPremiumStatus();
       if (message.type === "completeOnboarding") {
-        const { sync, local } = await getState();
-        sync.onboardingComplete = true;
-        await saveState(sync, local);
+        const { sync } = await getState();
+        const alreadyClaimed = Boolean(sync.onboardingStarterCashClaimed);
+        await saveOnboardingState(sync, true, "complete", { grantStarterCash: true });
+        return { ok: true, starterCash: alreadyClaimed ? 0 : ONBOARDING_STARTER_CASH };
+      }
+      if (message.type === "resetOnboarding") {
+        const { sync } = await getState();
+        await saveOnboardingState(sync, false, "intro");
+        return { ok: true };
+      }
+      if (message.type === "setOnboardingStep") {
+        const { sync } = await getState();
+        await saveOnboardingState(sync, false, message.step || "intro");
         return { ok: true };
       }
       return { ok: false, error: "Unknown action." };
     } catch (error) {
       return { ok: false, error: error.message };
     }
-  })().then(sendResponse);
+  })()
+    .then((response) => sendResponse(response || { ok: true }))
+    .catch((error) => sendResponse({ ok: false, error: error?.message || "Action failed." }));
   return true;
 });

@@ -1,3 +1,8 @@
+// Keep a persistent port open for the duration of the popup's lifetime.
+// background.js listens for this to know the popup is open and which normal
+// window to keep counting as eligible while the popup has OS focus.
+chrome.runtime.connect({ name: "popup" });
+
 const app = document.getElementById("app");
 let snapshot = null;
 let route = { name: "home" };
@@ -30,6 +35,7 @@ const {
   prestigeTotalFromLifetime,
   cacheCoreMultiplier,
   cacheCoreCost,
+  SUPPORTER_CORE_MULTIPLIER,
   getUpgradeLevel: upgradeLevel,
   upgradeCost,
   slotTierBonus,
@@ -50,7 +56,10 @@ const {
 } = BrowserTycoonMath;
 
 function send(type, payload = {}) {
-  return chrome.runtime.sendMessage({ type, ...payload });
+  return chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
+    ok: false,
+    error: error?.message || "Background worker did not respond."
+  }));
 }
 
 async function refresh({ full = false } = {}) {
@@ -231,13 +240,13 @@ function cc(value) {
   const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
   const sci = toSci(value);
   if (sci.m === 0) return "0";
-  if (sci.e < 3) return sciToNumber(sci).toFixed(sci.e < 1 ? 1 : 0);
+  if (sci.e < 3) return String(Math.floor(sciToNumber(sci)));
   const suffix = Math.floor(sci.e / 3);
   if (suffix >= 0 && suffix < suffixes.length) {
     const amount = sci.m * Math.pow(10, sci.e - suffix * 3);
-    return `${amount.toFixed(2)}${suffixes[suffix]}`;
+    return `${Math.floor(amount)}${suffixes[suffix]}`;
   }
-  return `${sci.m.toFixed(2)}e${sci.e}`;
+  return `${Math.floor(sci.m)}e${sci.e}`;
 }
 
 function dateAgo(value) {
@@ -309,40 +318,48 @@ function cacheCoreBaseRate(level = cacheCoreLevel()) {
   return BASE_RATE * cacheCoreMultiplier(level);
 }
 
+function supporterCoreMultiplier() {
+  return Number(snapshot?.premium?.multiplier || 1);
+}
+
+function supporterCorePaid() {
+  return Boolean(snapshot?.premium?.supporterCorePaid);
+}
+
 function domainBaseRate(entry) {
   return mathDomainBaseRate(entry, cacheCoreLevel());
 }
 
 function vaultCap(entry, coldLevel) {
-  return mathVaultCap(entry, coldLevel, cacheCoreLevel());
+  return mathVaultCap(entry, coldLevel, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function vaultRate(entry, storageLevel) {
-  return mathVaultRate(entry, storageLevel, cacheCoreLevel());
+  return mathVaultRate(entry, storageLevel, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function activeIncomeEstimate(entry, slot) {
-  return mathActiveIncomePerSecond(entry, slot, cacheCoreLevel());
+  return mathActiveIncomePerSecond(entry, slot, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function backgroundIncomePerSecond(entry, slot, backgroundSince, now) {
-  return mathBackgroundIncomePerSecond(entry, slot, backgroundSince, now, cacheCoreLevel());
+  return mathBackgroundIncomePerSecond(entry, slot, backgroundSince, now, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function dailyFirstOpenBonus(entry, slot) {
-  return mathDailyFirstOpenBonus(entry, slot, cacheCoreLevel());
+  return mathDailyFirstOpenBonus(entry, slot, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function dailyFirstOpenBonusForStreak(entry, slot, streak) {
-  return mathDailyFirstOpenBonusForStreak(entry, slot, streak, cacheCoreLevel());
+  return mathDailyFirstOpenBonusForStreak(entry, slot, streak, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function navigationPayoutForLevel(entry, slot, level) {
-  return mathNavigationPayoutForLevel(entry, slot, level, cacheCoreLevel());
+  return mathNavigationPayoutForLevel(entry, slot, level, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function wakeBurstForLevel(entry, slot, level) {
-  return mathWakeBurstForLevel(entry, slot, level, cacheCoreLevel());
+  return mathWakeBurstForLevel(entry, slot, level, cacheCoreLevel(), supporterCoreMultiplier());
 }
 
 function streakDoneToday(entry) {
@@ -382,7 +399,7 @@ function incomeFor(domain) {
 
 function stateLabel(domain) {
   const state = snapshot.local.presence[domain]?.state || "closed";
-  if (state === "active") return { text: "[FOCUSED]", className: "focused" };
+  if (state === "active") return { text: "[ACTIVE]", className: "focused" };
   if (state === "background") return { text: "[BACKGROUND]", className: "background" };
   return { text: "[INACTIVE]", className: "closed" };
 }
@@ -392,17 +409,18 @@ function currentRateTooltip(domain, entry, slot) {
   const base = money(domainBaseRate(entry));
   const tab = tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2);
   const tier = tierBonus(slot).toFixed(2);
+  const supporter = supporterCorePaid() ? ` x supporter core (${supporterCoreMultiplier().toFixed(2)})` : "";
   if (presence?.state === "active") {
     const focus = focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2);
-    return `Focused rate = base income (${base}/sec) x tab multiplier (${tab}) x focus bonus (${focus}) x slot multiplier (${tier}).`;
+    return `Active rate = base income (${base}/sec) x tab multiplier (${tab}) x focus bonus (${focus}) x slot multiplier (${tier})${supporter}.`;
   }
   if (presence?.state === "background") {
     const hum = (0.08 * upgradeLevel(entry, "backgroundHum")).toFixed(2);
     const idleSeconds = Math.max(0, (Date.now() - (presence.backgroundSince || Date.now())) / 1000);
     const idle = (1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5)).toFixed(2);
-    return `Background rate = base income (${base}/sec) x tab multiplier (${tab}) x background hum (${hum}) x idle depth (currently ${idle}) x slot multiplier (${tier}).`;
+    return `Background rate = base income (${base}/sec) x tab multiplier (${tab}) x background hum (${hum}) x idle depth (currently ${idle}) x slot multiplier (${tier})${supporter}.`;
   }
-  return "Inactive: this domain is not currently open as a focused or background tab, so its current rate is $0.00/sec.";
+  return "Inactive: this domain is not currently open as an active or background tab, so its current rate is $0.00/sec.";
 }
 
 function favicon(domain, className = "slot-icon") {
@@ -654,7 +672,7 @@ function renderWelcomeBackModal() {
           `}
           <div class="welcome-total">
             <span>TOTAL EARNED</span>
-            <strong>${money(rows ? displayTotal : floorToCent(award.total))}</strong>
+            <strong>${money(floorToCent(award.total))}</strong>
           </div>
         </div>
         <div class="modal-actions single">
@@ -716,7 +734,7 @@ function renderConfirmModal() {
       <section class="modal-panel${variantClass}" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
         <div class="modal-kicker">${modal.kicker || "CONFIRM ACTION"}</div>
         <h2 id="confirmTitle">${modal.title}</h2>
-        <p>${modal.body}</p>
+        <p style="margin-bottom: 12px;">${modal.body}</p>
         ${modal.reward ? `
           <div class="modal-reward">
             <span>${modal.reward.label}</span>
@@ -787,7 +805,7 @@ function renderDomainDetailsModal(domain, source = "slot") {
             ${fromLibrary ? renderLibraryDomainInfo(entry) : ""}
             ${renderDetailStatSection("DOMAIN EARNING", [
               ["Status", "ASSIGN TO A SLOT"],
-              ["Focused", "LOCKED"],
+              ["Active", "LOCKED"],
               ["Background", "LOCKED"],
               ["Vault", money(entry.vaultAmount)]
             ])}
@@ -811,7 +829,7 @@ function renderDomainDetailsModal(domain, source = "slot") {
         <div class="detail-grid">
           ${fromLibrary ? renderLibraryDomainInfo(entry) : ""}
           ${renderDetailStatSection("RATES", [
-            ["Focused", `${money(activeIncomeEstimate(entry, slot))}/sec`],
+            ["Active", `${money(activeIncomeEstimate(entry, slot))}/sec`],
             ["Background", `${money(backgroundIncomeEstimate(entry, slot, 0))}/sec`],
             ["Background Max Idle", `${money(backgroundIncomeEstimate(entry, slot, 1500))}/sec`],
             ["Inactive", "$0.00/sec"]
@@ -831,6 +849,7 @@ function renderDomainDetailsModal(domain, source = "slot") {
           ${renderDetailStatSection("MULTIPLIERS", [
             ["Base Income", `${money(domainBaseRate(entry))}/sec`],
             ["Slot Tier", `x${tierBonus(slot).toFixed(2)}`],
+            ...supporterCoreDetailRow(),
             ["Tab", `x${tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2)}`],
             ["Focus", `x${focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2)}`],
             ["Daily Boot", `x${dailyBootMultiplier(upgradeLevel(entry, "dailyBoot")).toFixed(2)}`],
@@ -918,15 +937,49 @@ function renderStore() {
       <div class="upgrade-section-label">CACHE SHOP</div>
       ${renderCacheCoreStoreItem()}
       ${renderSlotUpgradeStoreItem()}
+      <div class="upgrade-section-label" style="margin-top:20px;">PREMIUM STORE</div>
+      ${renderSupporterCoreStoreItem()}
       <div class="upgrade-section-label" style="margin-top:20px;">DEV TOOLS</div>
       <div class="dev-controls">
         <button class="btn" data-action="devCustomCash">DEV +$</button>
         <button class="btn btn-prestige" data-action="devCustomCC">DEV +CC</button>
+        <button class="btn" data-action="devReplayTutorial">DEV TUTORIAL</button>
         <button class="btn btn-danger" data-action="devReset">DEV RESET $/CC</button>
         <button class="btn btn-danger" data-action="devResetLifetime">DEV RESET LIFETIME</button>
       </div>
     </main>
   `, "store");
+}
+
+function renderSupporterCoreStoreItem() {
+  const paid = supporterCorePaid();
+  const price = snapshot?.premium?.price || "$2.99";
+  const tooltip = `One-time ${price} purchase. Supporter Core gives a permanent x${SUPPORTER_CORE_MULTIPLIER.toFixed(2)} multiplier to active income, background income, vault fill, daily bonuses, navigation payouts, and wake bursts.`;
+  return `
+    <div class="premium-store-block">
+      <div class="upgrade-item store-upgrade-item premium-store-item">
+        <div class="upgrade-info" style="flex:1;">
+          <img class="upgrade-icon" src="${iconPath(37)}" alt="">
+          <div class="upgrade-details" data-tooltip="${escapeAttribute(tooltip)}">
+            <div>
+              <span class="upgrade-name">Supporter Core</span>
+            </div>
+            <div class="upgrade-desc">Permanent x${SUPPORTER_CORE_MULTIPLIER.toFixed(2)} all-income boost.</div>
+          </div>
+        </div>
+        <button class="btn btn-buy ${paid ? "btn-premium-active" : ""}" ${paid ? "disabled" : `data-action="premiumPurchase"`}>
+          <span>${paid ? "ACTIVE" : "BUY"}</span>
+          ${paid ? "" : `<span style="font-size:12px">${price} USD</span>`}
+        </button>
+      </div>
+      <button class="btn btn-restore-purchase" data-action="premiumRestore">RESTORE PURCHASE</button>
+    </div>
+    ${snapshot?.premium?.error ? `<div class="store-note warning-text">${escapeHtml(snapshot.premium.error)}</div>` : ""}
+  `;
+}
+
+function supporterCoreDetailRow() {
+  return supporterCorePaid() ? [["Supporter Core", `x${supporterCoreMultiplier().toFixed(2)} ACTIVE`]] : [];
 }
 
 function renderCacheCoreStoreItem() {
@@ -940,7 +993,7 @@ function renderCacheCoreStoreItem() {
         <div class="upgrade-details" data-tooltip="${escapeAttribute(cacheCoreTooltip())}">
           <div>
             <span class="upgrade-name">Cache Core</span>
-            <span class="upgrade-level">${level <= 0 ? "INACTIVE" : `Lvl ${level}`}</span>
+            <span class="upgrade-level">Lvl ${level}</span>
           </div>
           <div class="upgrade-desc">Base rate ${money(cacheCoreBaseRate(level))}/sec -> ${money(cacheCoreBaseRate(level + 1))}/sec</div>
         </div>
@@ -977,9 +1030,9 @@ function renderSlotUpgradeStoreItem() {
 }
 
 function renderHome() {
-  if (!snapshot.sync.onboardingComplete) return renderOnboarding();
   shell(`
     <main class="view active">
+      ${renderOnboardingPrompt("slot")}
       <div class="slots-header">DOMAIN SLOTS</div>
       <div class="slots-grid">
         ${snapshot.sync.slots.map(renderSlot).join("")}
@@ -993,7 +1046,8 @@ function renderHome() {
 
 function renderSlot(slot) {
   if (!slot.assignedDomain) {
-    return `<button class="slot slot-empty" data-action="picker" data-slot="${slot.id}">+ ASSIGN DOMAIN</button>`;
+    const tutorialClass = onboardingStep() === "slot" && slot.id === 1 ? " tutorial-target" : "";
+    return `<button class="slot slot-empty${tutorialClass}" data-action="picker" data-slot="${slot.id}">+ ASSIGN DOMAIN</button>`;
   }
   const domain = slot.assignedDomain;
   const entry = entryFor(domain);
@@ -1029,10 +1083,14 @@ function renderOnboarding() {
   const scrollTop = previousRouteKey === nextRouteKey ? app.querySelector(".tutorial-overlay")?.scrollTop || 0 : 0;
   app.innerHTML = `
     <div class="tutorial-overlay">
-      <h2>WELCOME TO BROWSER TYCOON</h2>
-      <p>Transform your browsing into an idle clicker game.</p>
-      <p>Only slotted domains earn. Open a normal site, then fill your first slot with Add Current Site.</p>
-      <p>Upgrades, vaults, and Clear Cache prestige live inside each slotted domain.</p>
+      <img class="tutorial-logo" src="icons/browser-tycoon-text.png" alt="Browser Tycoon">
+      <h2>BUILD A BROWSING EMPIRE</h2>
+      <p>Every site you visit can become a money engine. Slot your favorite domains, keep browsing, and watch your empire hum in the background.</p>
+      <div class="tutorial-beats">
+        <p><strong>Slot domains.</strong> Only websites in your slots earn cash, fill vaults, and build streaks.</p>
+        <p><strong>Collect bursts.</strong> Come back to a site to claim its vault and daily first-open reward.</p>
+        <p><strong>Upgrade hard.</strong> Pour earnings into stronger domains, then Clear Cache for permanent power.</p>
+      </div>
       <button class="btn btn-prestige" data-action="finishOnboarding">START EARNING</button>
     </div>
   `;
@@ -1056,25 +1114,28 @@ function renderDetail(domain) {
   if (!BUY_MODES.includes(buyMode)) buyMode = "1";
   const state = stateLabel(domain);
 
+  const currentOnboardingStep = onboardingStep();
   const isDashboard = detailTab === "dashboard";
   const isUpgrades = detailTab === "upgrades";
 
   let content = "";
   if (isDashboard) {
     content = `
-      <div class="vault-panel domain-status-panel">
+      ${renderOnboardingPrompt("dashboard")}
+      <div class="vault-panel domain-status-panel${isDashboardOnboardingStep() ? " tutorial-target tutorial-target-panel" : ""}">
         <div class="vault-info">
           <div>
-            <span data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span>
+            <span class="${onboardingStep() === "dashboardStates" ? "tutorial-target tutorial-target-inline" : ""}" data-field="detailState">${state.text}</span> | <span data-field="detailIncome">${money(incomeFor(domain))}/sec</span>
             <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(currentRateTooltip(domain, entry, slot))}">?</span>
           </div>
           <small>BASE INCOME: <span data-field="detailBaseIncome">${money(domainBaseRate(entry))}/sec</span></small>
           <small>SLOT MULTIPLIER: <span data-field="detailSlotMultiplier">x${tierBonus(slot).toFixed(2)}</span></small>
+          ${supporterCorePaid() ? `<small>SUPPORTER CORE: <span data-field="detailSupporterCore">x${supporterCoreMultiplier().toFixed(2)} ACTIVE</span></small>` : ""}
           <small>STREAK: <span data-field="detailStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
         </div>
         <button class="btn btn-detail" data-action="domainDetails" data-domain="${domain}">DETAILS</button>
       </div>
-      <div class="vault-panel">
+      <div class="vault-panel${isVaultOnboardingStep() ? " tutorial-target tutorial-target-panel" : ""}">
         <div class="vault-info">
           <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
           <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span></small>
@@ -1083,17 +1144,22 @@ function renderDetail(domain) {
       </div>
     `;
   } else {
+    const activeUpgradeStep = currentOnboardingStep === "upgradeActive";
+    const backgroundUpgradeStep = currentOnboardingStep === "upgradeBackground";
+    const vaultUpgradeStep = currentOnboardingStep === "upgradeVault";
+    const categoryOnboarding = activeUpgradeStep || backgroundUpgradeStep || vaultUpgradeStep;
     content = `
+      ${renderOnboardingPrompt("upgrades")}
       <div class="upgrade-toolbar" style="display:flex; align-items:stretch; gap:10px; margin-bottom:10px;">
         <div class="upgrade-tabs" style="display:flex; gap:4px; flex:1;">
-          <button class="btn ${detailUpgradeTab === "active" ? "active" : ""}" data-action="detailUpgradeTab" data-tab="active" style="flex:1; padding:6px 0; font-size:14px;">ACTIVE</button>
-          <button class="btn ${detailUpgradeTab === "vault" ? "active" : ""}" data-action="detailUpgradeTab" data-tab="vault" style="flex:1; padding:6px 0; font-size:14px;">VAULT</button>
-          <button class="btn ${detailUpgradeTab === "background" ? "active" : ""}" data-action="detailUpgradeTab" data-tab="background" style="flex:1; padding:6px 0; font-size:14px;">BACKGROUND</button>
+          <button class="btn ${detailUpgradeTab === "active" ? "active" : ""}${activeUpgradeStep ? " tutorial-target" : ""}" data-action="detailUpgradeTab" data-tab="active" style="flex:1; padding:6px 0; font-size:14px;">ACTIVE</button>
+          <button class="btn ${detailUpgradeTab === "background" ? "active" : ""}${backgroundUpgradeStep ? " tutorial-target" : ""}" data-action="detailUpgradeTab" data-tab="background" style="flex:1; padding:6px 0; font-size:14px;">BACKGROUND</button>
+          <button class="btn ${detailUpgradeTab === "vault" ? "active" : ""}${vaultUpgradeStep ? " tutorial-target" : ""}" data-action="detailUpgradeTab" data-tab="vault" style="flex:1; padding:6px 0; font-size:14px;">VAULT</button>
         </div>
         <div style="width:1px; background:var(--primary); opacity:0.3; margin:4px 0;"></div>
         <button class="btn" data-action="mode" data-mode="${buyMode === "1" ? "10" : "1"}" style="padding:6px; font-size:14px; min-width:64px; flex-shrink:0;">BUY ${buyMode}</button>
       </div>
-      <div class="upgrade-list">
+      <div class="upgrade-list${categoryOnboarding ? " tutorial-target tutorial-target-panel" : ""}">
         ${renderUpgradeGroups(entry)}
       </div>
     `;
@@ -1124,7 +1190,7 @@ function renderDetail(domain) {
       </div>
       <div class="detail-tabs" style="display:flex; gap:10px; margin-bottom:10px;">
         <button class="btn ${isDashboard ? "active" : ""}" style="flex:1;" data-action="detailTab" data-tab="dashboard">DASHBOARD</button>
-        <button class="btn ${isUpgrades ? "active" : ""}" style="flex:1;" data-action="detailTab" data-tab="upgrades">UPGRADES</button>
+        <button class="btn ${isUpgrades ? "active" : ""}${isUpgradeTabOnboardingStep() ? " tutorial-target" : ""}" style="flex:1;" data-action="detailTab" data-tab="upgrades">UPGRADES</button>
       </div>
       ${content}
     </main>
@@ -1150,7 +1216,7 @@ function renderUpgrade(entry, def) {
         <div class="upgrade-details" data-tooltip="${escapeAttribute(tooltip)}">
           <div>
             <span class="upgrade-name">${def.name}</span>
-            <span class="upgrade-level">${level <= 0 ? "INACTIVE" : `Lvl ${level}${def.maxLevel ? "/" + def.maxLevel : ""}`}</span>
+            <span class="upgrade-level">Lvl ${level}${def.maxLevel ? "/" + def.maxLevel : ""}</span>
           </div>
           <div class="upgrade-desc">${summary}</div>
         </div>
@@ -1171,6 +1237,13 @@ function escapeAttribute(value) {
     .replace(/>/g, "&gt;");
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function effectSummary(id, level, targetLevel = level + 1) {
   const next = targetLevel;
   const entry = currentDetailEntry();
@@ -1178,7 +1251,7 @@ function effectSummary(id, level, targetLevel = level + 1) {
   const map = {
     trafficEngine: `Base income ${money(BASE_RATE * cacheCoreMultiplier(cacheCoreLevel()) * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, level))}/sec -> ${money(BASE_RATE * cacheCoreMultiplier(cacheCoreLevel()) * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, next))}/sec`,
     tabMultiplier: `Live income x${(1 + 0.15 * level).toFixed(2)} -> x${(1 + 0.15 * next).toFixed(2)}`,
-    focusBonus: `Focused income x${focusMultiplier(level).toFixed(2)} -> x${focusMultiplier(next).toFixed(2)}`,
+    focusBonus: `Active income x${focusMultiplier(level).toFixed(2)} -> x${focusMultiplier(next).toFixed(2)}`,
     navigationBonus: `Navigation payout ${money(navigationPayoutForLevel(entry, slot, level))} -> ${money(navigationPayoutForLevel(entry, slot, next))}`,
     coldStorage: `Vault cap ${money(vaultCapForLevels(level))} -> ${money(vaultCapForLevels(next))}`,
     storageDuration: `Vault fill rate ${money(vaultRateForLevel(level))}/sec -> ${money(vaultRateForLevel(next))}/sec`,
@@ -1196,10 +1269,10 @@ function upgradeTooltip(id, level) {
       "Traffic Engine raises this domain's base income before tab, focus, background, and slot tier multipliers are applied."
     ],
     tabMultiplier: [
-      "Tab Multiplier boosts live income whenever this domain is open, including focused and background income."
+      "Tab Multiplier boosts live income whenever this domain is open, including active and background income."
     ],
     focusBonus: [
-      "Focus Bonus boosts income while this domain is the active tab in the focused browser window."
+      "Focus Bonus boosts income while this domain is the active tab in the active browser window."
     ],
     navigationBonus: [
       "Navigation Bonus pays when you make a top-level navigation inside this slotted domain. It has a 1 minute cooldown per domain."
@@ -1214,13 +1287,13 @@ function upgradeTooltip(id, level) {
       "Daily Boot increases the first-open daily bonus for this domain. Streak and slot streak bonuses multiply this payout too."
     ],
     backgroundHum: [
-      "Background Hum lets this domain keep earning while it is open in a non-focused tab."
+      "Background Hum lets this domain keep earning while it is open in a non-active tab."
     ],
     idleDepth: [
       "Idle Depth increases background income the longer the domain stays open in the background, reaching max boost after 25 minutes."
     ],
     wakeBonus: [
-      "Wake Bonus pays a burst when this domain returns from background to focused. 1 minute cooldown per domain."
+      "Wake Bonus pays a burst when this domain returns from background to active. 1 minute cooldown per domain."
     ]
   };
   return (lines[id] || [effectSummary(id, level)]).join("\n");
@@ -1254,7 +1327,8 @@ function renderLibrary(pickSlotId = null) {
         <span>${pickSlotId ? `ASSIGN SLOT ${pickSlotId}` : "DOMAIN LIBRARY"}</span>
       </div>
       ${showManualAssign ? `
-        <div class="library-controls">
+        ${renderOnboardingPrompt("domain")}
+        <div class="library-controls${onboardingStep() === "domain" ? " tutorial-target tutorial-target-panel" : ""}">
           <input class="input-text" data-manual-domain data-slot="${pickSlotId}" value="${manualDefault}" placeholder="Enter domain (e.g. github.com)">
           <button class="btn" data-action="assignTyped" data-slot="${pickSlotId}">${pickSlot.assignedDomain ? "SWAP IN" : "ADD TO SLOT"}</button>
         </div>
@@ -1268,6 +1342,125 @@ function renderLibrary(pickSlotId = null) {
       </div>
     </main>
   `, pickSlotId ? "slots" : "library");
+}
+
+function onboardingStep() {
+  if (snapshot?.sync?.onboardingComplete) return "complete";
+  return snapshot?.sync?.onboardingStep || "intro";
+}
+
+function isDashboardOnboardingStep() {
+  return onboardingStep() === "dashboardEarning";
+}
+
+function isVaultOnboardingStep() {
+  return onboardingStep() === "dashboardVault";
+}
+
+function isUpgradeTabOnboardingStep() {
+  return onboardingStep() === "dashboardUpgrades";
+}
+
+function renderOnboardingPrompt(step) {
+  const current = onboardingStep();
+  if (step === "slot" && current === "slot") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-slot">
+        <strong>Step 1: Claim your first slot.</strong>
+        <span>Click the first domain slot. This is where your favorite site starts earning.</span>
+      </div>
+    `;
+  }
+  if (step === "domain" && current === "domain") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-domain">
+        <strong>Step 2: Pick a site you actually use.</strong>
+        <span>Enter a domain like youtube.com, github.com, reddit.com, or whatever you visit every day, then assign it.</span>
+      </div>
+    `;
+  }
+  if (step === "dashboard" && current === "dashboardEarning") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-dashboard onboarding-callout-dashboard-earning">
+        <strong>Step 3: Watch this domain earn.</strong>
+        <span>This block shows the domain's current state and exactly how much cash it is making right now.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="dashboardStates">NEXT</button>
+      </div>
+    `;
+  }
+  if (step === "dashboard" && current === "dashboardStates") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-dashboard onboarding-callout-dashboard-states">
+        <strong>Step 4: Learn the earning states.</strong>
+        <span><strong>Active</strong> means the site is your current tab. <strong>Background</strong> means it is open but not active. <strong>Inactive</strong> means it is not open, so live income is $0/sec.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="dashboardVault">NEXT</button>
+      </div>
+    `;
+  }
+  if (step === "dashboard" && current === "dashboardVault") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-dashboard onboarding-callout-vault">
+        <strong>Step 5: Check the vault.</strong>
+        <span>The vault stores extra cash while this domain is away from active use. Come back later, then collect the burst.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="dashboardUpgrades">NEXT</button>
+      </div>
+    `;
+  }
+  if (step === "dashboard" && current === "dashboardUpgrades") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-dashboard onboarding-callout-upgrades">
+        <strong>Step 6: Open upgrades.</strong>
+        <span>Click <strong>UPGRADES</strong> to start making this domain stronger.</span>
+      </div>
+    `;
+  }
+  if (step === "upgrades" && current === "upgradeActive") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-upgrade-section">
+        <strong>Step 7: Active upgrades.</strong>
+        <span>Active upgrades improve how much this domain earns while it is your current active tab.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="upgradeBackground" data-upgrade-tab="background">NEXT</button>
+      </div>
+    `;
+  }
+  if (step === "upgrades" && current === "upgradeBackground") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-upgrade-section">
+        <strong>Step 8: Background upgrades.</strong>
+        <span>Background upgrades help domains keep earning while they are open in another tab, and reward bringing them back.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="upgradeVault" data-upgrade-tab="vault">NEXT</button>
+      </div>
+    `;
+  }
+  if (step === "upgrades" && current === "upgradeVault") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-upgrade-section">
+        <strong>Step 9: Vault upgrades.</strong>
+        <span>Vault upgrades increase storage, fill speed, and daily bonuses so returning to this domain pays bigger bursts.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="tutorialReward">NEXT</button>
+      </div>
+    `;
+  }
+  if (step === "upgrades" && current === "tutorialReward") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-reward">
+        <strong>Your first domain is online.</strong>
+        <span>Here's $1,000 to kickstart your empire. Buy a few upgrades, keep this site in rotation, and let the vault build while you browse.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="complete">START BUILDING</button>
+      </div>
+    `;
+  }
+  return "";
 }
 
 function filteredLibraryDomains(pickSlotId = null) {
@@ -1336,33 +1529,61 @@ async function handleAction(event) {
   if (action === "home") route = { name: "home" };
   if (action === "detail") route = { name: "detail", domain: node.dataset.domain };
   if (action === "detailTab") detailTab = node.dataset.tab;
+  if (action === "detailTab" && node.dataset.tab === "upgrades" && onboardingStep() === "dashboardUpgrades") {
+    detailUpgradeTab = "active";
+    const result = await act("setOnboardingStep", { step: "upgradeActive" });
+    if (result?.ok) snapshot.sync.onboardingStep = "upgradeActive";
+  }
   if (action === "detailUpgradeTab") detailUpgradeTab = node.dataset.tab;
   if (action === "domainManage") modal = { name: "domainManage", slotId: Number(node.dataset.slot) };
   if (action === "library") route = { name: "library" };
   if (action === "store") route = { name: "store" };
   if (action === "domainSummary") route = { name: "domainSummary", domain: node.dataset.domain };
-  if (action === "picker") { route = { name: "picker", slotId: Number(node.dataset.slot) }; modal = null; }
+  if (action === "picker") {
+    const slotId = Number(node.dataset.slot);
+    route = { name: "picker", slotId };
+    modal = null;
+    if (onboardingStep() === "slot" && slotId === 1) {
+      const result = await act("setOnboardingStep", { step: "domain" });
+      if (result?.ok) snapshot.sync.onboardingStep = "domain";
+    }
+  }
   if (action === "mode" && BUY_MODES.includes(node.dataset.mode)) buyMode = node.dataset.mode;
   if (action === "openDomain") await chrome.tabs.create({ url: `https://${node.dataset.domain}` });
-  if (action === "finishOnboarding") await act("completeOnboarding");
+  if (action === "finishOnboarding") {
+    const result = await act("setOnboardingStep", { step: "slot" });
+    if (result?.ok) {
+      snapshot.sync.onboardingComplete = false;
+      snapshot.sync.onboardingStep = "slot";
+      route = { name: "home" };
+    }
+  }
   if (action === "addCurrent") {
     const slotId = Number(node.dataset.slot);
     const result = await act("addCurrentSite", { slotId });
-    if (result?.ok) routeToAssignedDomain(slotId);
+    if (result?.ok) {
+      if (onboardingStep() === "domain") await act("setOnboardingStep", { step: "dashboardEarning" });
+      routeToAssignedDomain(slotId);
+    }
   }
   if (action === "assignTyped") {
     const slotId = Number(node.dataset.slot);
     const input = app.querySelector(`[data-manual-domain][data-slot="${slotId}"]`);
+    const completingOnboarding = onboardingStep() === "domain";
     const result = await act("assignDomain", {
       slotId,
       domain: input?.value || "",
       fromCurrentSite: Boolean(snapshot.currentSite?.valid),
       currentDomain: snapshot.currentSite?.domain || ""
-    });
-    if (result?.ok) routeToAssignedDomain(slotId);
+    }, { silent: completingOnboarding });
+    if (result?.ok) {
+      if (completingOnboarding) await act("setOnboardingStep", { step: "dashboardEarning" });
+      routeToAssignedDomain(slotId);
+    }
   }
   if (action === "assign") {
     const slotId = Number(node.dataset.slot);
+    const completingOnboarding = onboardingStep() === "domain";
     modal = {
       name: "confirm",
       kicker: "SLOT ASSIGNMENT",
@@ -1376,7 +1597,8 @@ async function handleAction(event) {
         fromCurrentSite: Boolean(snapshot.currentSite?.valid),
         currentDomain: snapshot.currentSite?.domain || ""
       },
-      after: { routeAssignedSlot: slotId }
+      after: { routeAssignedSlot: slotId, onboardingStep: completingOnboarding ? "dashboardEarning" : null },
+      silent: completingOnboarding
     };
   }
   if (action === "swapDomain") {
@@ -1393,8 +1615,29 @@ async function handleAction(event) {
   if (action === "claim") await act("claimRevisit", { domain: node.dataset.domain });
   if (action === "unlock") await act("unlockSlot");
   if (action === "tier") await act("upgradeSlotTier", { slotId: Number(node.dataset.slot) });
+  if (action === "premiumPurchase") await act("openPremiumPayment");
+  if (action === "premiumRestore") await act("openPremiumLogin");
   if (action === "devCustomCash") modal = { name: "devInput", title: "ADD CASH", body: "Enter a custom dollar amount to add.", actionType: "devAddCash" };
   if (action === "devCustomCC") modal = { name: "devInput", title: "ADD CACHE CREDITS", body: "Enter a custom CC amount to add.", actionType: "devAddCachePoints" };
+  if (action === "devReplayTutorial") {
+    const result = await act("resetOnboarding");
+    if (result?.ok) {
+      snapshot.sync.onboardingComplete = false;
+      snapshot.sync.onboardingStep = "intro";
+      modal = null;
+      route = { name: "home" };
+    }
+  }
+  if (action === "onboardingNext") {
+    const nextStep = node.dataset.step;
+    if (nextStep === "complete") {
+      await act("completeOnboarding");
+    } else {
+      if (node.dataset.upgradeTab) detailUpgradeTab = node.dataset.upgradeTab;
+      const result = await act("setOnboardingStep", { step: nextStep });
+      if (result?.ok) snapshot.sync.onboardingStep = nextStep;
+    }
+  }
   if (action === "devInputConfirm" && modal?.name === "devInput") {
     const input = app.querySelector("[data-dev-input]");
     const amount = Number(input?.value || 0);
@@ -1459,7 +1702,8 @@ async function handleAction(event) {
   if (action === "confirmModal" && modal?.name === "confirm") {
     const pending = modal;
     modal = null;
-    const result = await act(pending.actionType, pending.payload || {});
+    const result = await act(pending.actionType, pending.payload || {}, { silent: Boolean(pending.silent) });
+    if (result?.ok && pending.after?.onboardingStep) await act("setOnboardingStep", { step: pending.after.onboardingStep });
     if (result?.ok && pending.after?.routeAssignedSlot) routeToAssignedDomain(pending.after.routeAssignedSlot);
   }
   if (action === "confirmSwapDomain" && modal?.name === "swapDomain") {
@@ -1502,19 +1746,31 @@ function routeToAssignedDomain(slotId) {
   if (slot?.assignedDomain) route = { name: "detail", domain: slot.assignedDomain };
 }
 
-async function act(type, payload = {}) {
+async function act(type, payload = {}, options = {}) {
   const result = await send(type, payload);
-  if (!result?.ok) showToast(result?.error || "Action failed.", "warning");
-  else if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${cc(result.award)} CC.`);
+  if (!result?.ok) {
+    showToast(result?.error || "Action failed.", "warning");
+    return result;
+  }
+  if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${cc(result.award)} CC.`);
   else if (type === "upgradeCacheCore") showToast(`CACHE CORE LEVEL ${result.level}.`);
+  else if (type === "openPremiumPayment") showToast("PAYMENT PAGE OPENED.");
+  else if (type === "openPremiumLogin") showToast("RESTORE PAGE OPENED.");
+  else if (type === "refreshPremiumStatus") showToast(result.paid ? "SUPPORTER CORE ACTIVE." : "NO PURCHASE FOUND.", result.paid ? "success" : "warning");
+  else if (type === "completeOnboarding" || type === "resetOnboarding" || type === "setOnboardingStep") {}
+  else if (options.silent) {}
   else showToast("SUCCESS");
   snapshot = await send("snapshot");
   resetLiveTickerBaseline();
+  if (type === "completeOnboarding" && Number(result.starterCash || 0) > 0) {
+    showCollectBurst(result.starterCash);
+  }
   return result;
 }
 
 function render() {
   if (!snapshot) return;
+  if (onboardingStep() === "intro") return renderOnboarding();
   if (route.name === "detail") return renderDetail(route.domain);
   if (route.name === "store") return renderStore();
   if (route.name === "library") return renderLibrary();
