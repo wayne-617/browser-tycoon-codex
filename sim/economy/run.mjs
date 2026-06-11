@@ -179,7 +179,16 @@ async function main() {
   economy.cacheCoreMultiplierBase = numberArg(args, "cache-core-multiplier", economy.cacheCoreMultiplierBase || 1.5);
   economy.cacheCoreBaseCost = numberArg(args, "cache-core-base-cost", economy.cacheCoreBaseCost || 5);
   economy.cacheCoreCostGrowth = numberArg(args, "cache-core-cost-growth", economy.cacheCoreCostGrowth || 1.5);
-  economy.coldStorageMultiplier = numberArg(args, "cold-storage-multiplier", economy.coldStorageMultiplier || 1.32);
+  economy.vaultLinearMultiplier = numberArg(args, "vault-linear-multiplier", economy.vaultLinearMultiplier ?? 0.12);
+  economy.vaultPolyMultiplier = numberArg(args, "vault-poly-multiplier", economy.vaultPolyMultiplier ?? 0.005);
+  economy.vaultPolyExponent = numberArg(args, "vault-poly-exponent", economy.vaultPolyExponent ?? 3);
+  economy.vaultTrafficExponent = numberArg(args, "vault-traffic-exponent", economy.vaultTrafficExponent ?? 0.9);
+  economy.backgroundTrafficExponent = numberArg(args, "background-traffic-exponent", economy.backgroundTrafficExponent ?? 0.9);
+  economy.dailyBaseMinutes = numberArg(args, "daily-base-minutes", economy.dailyBaseMinutes ?? 60);
+  economy.dailyStreakBaseMultiplier = numberArg(args, "daily-streak-base-multiplier", economy.dailyStreakBaseMultiplier ?? 0.04);
+  economy.dailyStreakBootMultiplier = numberArg(args, "daily-streak-boot-multiplier", economy.dailyStreakBootMultiplier ?? 0.2);
+  economy.navigationEventSeconds = numberArg(args, "navigation-event-seconds", economy.navigationEventSeconds ?? 18);
+  economy.wakeBurstSeconds = numberArg(args, "wake-burst-seconds", economy.wakeBurstSeconds ?? 105);
 
   const navigationEventsPerFocusedHour = numberArg(args, "navigation-events-per-focused-hour", DEFAULT_SIM_OPTIONS.navigationEventsPerFocusedHour);
   const wakeEventsPerDomainPerDay = numberArg(args, "wake-events-per-domain-day", DEFAULT_SIM_OPTIONS.wakeEventsPerDomainPerDay);
@@ -189,6 +198,7 @@ async function main() {
     focusMinutesPerDay: numberArg(args, "focus-minutes", DEFAULT_SIM_OPTIONS.focusMinutesPerDay),
     backgroundMinutesPerOtherSlotPerDay: numberArg(args, "background-minutes", DEFAULT_SIM_OPTIONS.backgroundMinutesPerOtherSlotPerDay),
     vaultClaimsPerDay: numberArg(args, "vault-claims-per-day", DEFAULT_SIM_OPTIONS.vaultClaimsPerDay),
+    startingCash: numberArg(args, "starting-cash", DEFAULT_SIM_OPTIONS.startingCash),
     startingSlots: numberArg(args, "starting-slots", DEFAULT_SIM_OPTIONS.startingSlots),
     includeDailyBonus: !boolArg(args, "no-daily-bonus", false),
     enableNavigationBonus: boolArg(args, "enable-navigation", DEFAULT_SIM_OPTIONS.enableNavigationBonus) || navigationEventsPerFocusedHour > 0,

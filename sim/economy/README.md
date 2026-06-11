@@ -25,6 +25,7 @@ The main controls are:
 - total focused hours per day
 - background hours per other tab
 - vault checks per day
+- starting cash
 - prestige reset mode, reset count, and reset days
 
 Advanced economy and upgrade cost controls are available in collapsible sections.
@@ -34,22 +35,33 @@ Advanced economy and upgrade cost controls are available in collapsible sections
 ```powershell
 node sim/economy/run.mjs --days 180
 node sim/economy/run.mjs --focus-minutes 60 --background-minutes 30
+node sim/economy/run.mjs --starting-cash 1000
 node sim/economy/run.mjs --traffic-multiplier 1.2 --prestige-divisor 250000
 node sim/economy/run.mjs --cache-core-multiplier 1.5 --cache-core-base-cost 5 --cache-core-cost-growth 2
-node sim/economy/run.mjs --vault-claims-per-day 4 --cold-storage-multiplier 1.32
+node sim/economy/run.mjs --vault-claims-per-day 2 --vault-linear-multiplier 0.12 --vault-poly-multiplier 0.005 --vault-poly-exponent 3
+node sim/economy/run.mjs --vault-traffic-exponent 0.9 --background-traffic-exponent 0.9
+node sim/economy/run.mjs --daily-base-minutes 60 --daily-streak-base-multiplier 0.04 --daily-streak-boot-multiplier 0.2 --navigation-event-seconds 18 --wake-burst-seconds 105
 node sim/economy/run.mjs --days 100 --prestige-mode --prestige-resets 2 --prestige-reset-days 30,60
 ```
 
 ## Defaults
 
-- `days`: `14`
+- `days`: `21`
 - `focus-minutes`: `120` total focused minutes per day, split evenly across unlocked domains
-- `background-minutes`: `30` minutes per other slot per day
-- `vault-claims-per-day`: `3`
+- `background-minutes`: `60` minutes per other slot per day
+- `vault-claims-per-day`: `2`
+- `starting-cash`: `$1000`, counted as initial lifetime earnings and spendable before day 1
+- Vault cap stores `25` minutes of base income before Cold Storage scaling, so equal Cold Storage and Vault Pump levels take about `20.8` hours to fill.
+- Vault Pump and Cold Storage scale as `1 + 0.12 * level + 0.005 * level^3`
+- `vault-traffic-exponent`: `0.9`, so vault inherits most, but not all, late-game Traffic Engine scaling
+- `background-traffic-exponent`: `0.9`, so background income also inherits most, but not all, late-game Traffic Engine scaling
+- Daily first-open payout uses base domain rate times `60` minutes, with streak scaling `1 + 0.04 * streak * (1 + 0.2 * sqrt(Daily Boot level))`
+- Navigation payouts use active income per second times `18` seconds times `sqrt(Navigation Bonus level)` per event
+- Wake payouts use base domain rate times `105` seconds times `Wake Bonus level^1.1`
 - `starting-slots`: `3`
-- prestige reset mode enabled with `1` reset after day `6`
+- prestige reset mode enabled with `2` resets after days `6` and `14`
 - navigation events enabled at `5` per focused hour
-- wake events enabled at `1` per domain per day
+- wake events enabled at `3` per domain per day
 
 The simulator reads current app constants and upgrade definitions from `v1/background.js` by default. If the background service worker imports `v1/game-math.js`, the simulator follows that import and reads the shared economy math from there.
 

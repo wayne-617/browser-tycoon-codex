@@ -104,10 +104,28 @@ body {
 }
 
 .balance {
+  position: relative;
+  z-index: 0;
   font-size: 32px;
   line-height: 1;
   color: var(--primary);
   text-shadow: 0 0 5px var(--primary);
+}
+
+.balance-rolling {
+  animation: balance-roll-pop 0.82s ease-out;
+}
+
+.balance-rolling::after {
+  content: "";
+  position: absolute;
+  inset: -5px -9px;
+  z-index: -1;
+  border-radius: 4px;
+  background: radial-gradient(ellipse at center, rgba(0, 255, 102, 0.28), rgba(0, 255, 102, 0));
+  opacity: 0;
+  pointer-events: none;
+  animation: balance-roll-glow 0.82s ease-out;
 }
 
 .collect-burst {
@@ -155,6 +173,25 @@ body {
 .prestige-currency:hover {
   background: rgba(185, 0, 255, 0.1);
   box-shadow: 0 0 8px rgba(185, 0, 255, 0.4);
+  transform: translateY(-2px);
+}
+
+.settings-button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  font-family: "VT323", "Consolas", monospace;
+  font-size: 24px;
+  line-height: 1;
+  padding: 0;
+}
+
+.settings-button:hover {
+  background: transparent;
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.65);
   transform: translateY(-2px);
 }
 
@@ -1057,6 +1094,10 @@ body {
   text-align: center;
 }
 
+.onboarding-callout-pin {
+  min-height: 136px;
+}
+
 .onboarding-callout strong {
   color: var(--warning);
   font-size: 18px;
@@ -1195,6 +1236,46 @@ body {
   line-height: 1.15;
 }
 
+.settings-list {
+  display: grid;
+  gap: 9px;
+  margin: 12px 0;
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  background: rgba(4, 13, 20, 0.46);
+  padding: 10px;
+}
+
+.settings-toggle span {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-toggle strong {
+  color: var(--primary);
+  font-size: 20px;
+  font-weight: normal;
+}
+
+.settings-toggle small {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.12;
+}
+
+.settings-toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--success);
+  flex: 0 0 auto;
+}
+
 .modal-reward {
   display: flex;
   justify-content: space-between;
@@ -1211,6 +1292,44 @@ body {
   font-size: 26px;
   font-weight: normal;
   text-shadow: 0 0 6px rgba(0, 255, 102, 0.32);
+}
+
+.prestige-lock {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 204, 0, 0.45);
+  background: rgba(255, 204, 0, 0.06);
+}
+
+.prestige-lock-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.prestige-lock-row strong {
+  color: var(--warning);
+  font-size: 20px;
+  font-weight: normal;
+  text-align: right;
+  text-shadow: 0 0 6px rgba(255, 204, 0, 0.28);
+}
+
+.prestige-progress {
+  height: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 204, 0, 0.45);
+  background: rgba(255, 204, 0, 0.08);
+}
+
+.prestige-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--warning), var(--secondary));
+  box-shadow: 0 0 10px rgba(255, 204, 0, 0.35);
 }
 
 .welcome-back-modal {
@@ -1612,6 +1731,47 @@ body {
     opacity: 0;
     transform: translateY(-10px);
   }
+}
+
+@keyframes balance-roll-pop {
+  0% {
+    color: var(--primary);
+    text-shadow: 0 0 5px var(--primary);
+    transform: translateY(1px) scale(0.98);
+  }
+  12% {
+    color: color-mix(in srgb, var(--primary) 45%, var(--success));
+    text-shadow: 0 0 5px var(--primary), 0 0 9px rgba(0, 255, 102, 0.22);
+  }
+  24% {
+    color: var(--success);
+    text-shadow: 0 0 6px var(--success), 0 0 18px rgba(0, 255, 102, 0.46);
+  }
+  38% {
+    color: var(--success);
+    text-shadow: 0 0 6px var(--success), 0 0 18px rgba(0, 255, 102, 0.38);
+    transform: translateY(-1px) scale(1.04);
+  }
+  68% {
+    color: color-mix(in srgb, var(--primary) 55%, var(--success));
+    text-shadow: 0 0 5px var(--primary), 0 0 10px rgba(0, 255, 102, 0.18);
+  }
+  82% {
+    color: var(--primary);
+    text-shadow: 0 0 5px var(--primary);
+  }
+  100% {
+    color: var(--primary);
+    text-shadow: 0 0 5px var(--primary);
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes balance-roll-glow {
+  0% { opacity: 0; transform: scaleX(0.82); }
+  18% { opacity: 0.9; transform: scaleX(1); }
+  56% { opacity: 0.55; transform: scaleX(1.02); }
+  100% { opacity: 0; transform: scaleX(1.08); }
 }
 
  . d e t a i l - t a b s   { 

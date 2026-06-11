@@ -115,6 +115,9 @@ export function renderReport(result) {
         <label>Vault checks per day
           <input name="vaultClaimsPerDay" type="number" min="1" step="1" value="${initialConfig.vaultClaimsPerDay}">
         </label>
+        <label>Starting cash
+          <input name="startingCash" type="number" min="0" step="1" value="${initialConfig.startingCash || 0}">
+        </label>
       </div>
       <div class="actions">
         <label class="check-row"><input name="prestigeMode" type="checkbox" ${initialConfig.prestigeMode ? "checked" : ""}> Prestige reset mode</label>
@@ -140,8 +143,35 @@ export function renderReport(result) {
           <label>Vault rate
             <input name="vaultRate" type="number" min="0" step="any" value="${economy.vaultRate}">
           </label>
-          <label>Cold Storage multiplier
-            <input name="coldStorageMultiplier" type="number" min="1" step="0.01" value="${economy.coldStorageMultiplier || 1.32}">
+          <label>Vault linear multiplier
+            <input name="vaultLinearMultiplier" type="number" min="0" step="0.01" value="${economy.vaultLinearMultiplier ?? 0.12}">
+          </label>
+          <label>Vault curve multiplier
+            <input name="vaultPolyMultiplier" type="number" min="0" step="0.001" value="${economy.vaultPolyMultiplier ?? 0.005}">
+          </label>
+          <label>Vault curve exponent
+            <input name="vaultPolyExponent" type="number" min="1" step="0.01" value="${economy.vaultPolyExponent ?? 3}">
+          </label>
+          <label>Vault traffic exponent
+            <input name="vaultTrafficExponent" type="number" min="0" step="0.01" value="${economy.vaultTrafficExponent ?? 0.9}">
+          </label>
+          <label>Background traffic exponent
+            <input name="backgroundTrafficExponent" type="number" min="0" step="0.01" value="${economy.backgroundTrafficExponent ?? 0.9}">
+          </label>
+          <label>Daily base minutes
+            <input name="dailyBaseMinutes" type="number" min="0" step="1" value="${economy.dailyBaseMinutes ?? 60}">
+          </label>
+          <label>Daily streak base multiplier
+            <input name="dailyStreakBaseMultiplier" type="number" min="0" step="0.01" value="${economy.dailyStreakBaseMultiplier ?? 0.04}">
+          </label>
+          <label>Daily streak boot multiplier
+            <input name="dailyStreakBootMultiplier" type="number" min="0" step="0.01" value="${economy.dailyStreakBootMultiplier ?? 0.2}">
+          </label>
+          <label>Navigation event seconds
+            <input name="navigationEventSeconds" type="number" min="0" step="0.5" value="${economy.navigationEventSeconds ?? 18}">
+          </label>
+          <label>Wake burst seconds
+            <input name="wakeBurstSeconds" type="number" min="0" step="1" value="${economy.wakeBurstSeconds ?? 105}">
           </label>
           <label>Traffic multiplier
             <input name="trafficEngineMultiplier" type="number" min="1" step="0.01" value="${economy.trafficEngineMultiplier}">
@@ -237,8 +267,7 @@ function floorToSignificantFigures(value, figures = 2) {
 
 function slotUnlockCost(slotNumber) {
   if (slotNumber <= 3) return 0;
-  if (slotNumber === 4) return 500;
-  return floorToSignificantFigures(500 * Math.pow(5, Math.pow(slotNumber - 3.75, 1.35)));
+  return floorToSignificantFigures(1000 * Math.pow(100, Math.max(0, slotNumber - 4)));
 }
 
 function prestigeTotalFromLifetime(lifetime, prestigeDivisor) {
@@ -296,6 +325,12 @@ function activeRate(domain, economy, slotTier, cacheCoreLevel) {
   return domainBaseRate(domain, economy, cacheCoreLevel) * tab * focus * tierBonus(economy, slotTier);
 }
 
+function backgroundBaseRate(domain, economy, cacheCoreLevel) {
+  const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
+  const trafficRatio = Math.pow(economy.trafficEngineMultiplier, level(domain, "trafficEngine"));
+  return economy.baseRate * coreMultiplier * Math.pow(trafficRatio, economy.backgroundTrafficExponent ?? 0.9);
+}
+
 function averageIdleDepthFactor(seconds) {
   if (seconds <= 0) return 0;
   if (seconds <= 1500) return seconds / 600;
@@ -307,27 +342,39 @@ function backgroundEarnings(domain, economy, slotTier, seconds, cacheCoreLevel) 
   if (hum <= 0 || seconds <= 0) return 0;
   const idle = 1 + 0.1 * level(domain, "idleDepth") * averageIdleDepthFactor(seconds);
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
-  return domainBaseRate(domain, economy, cacheCoreLevel) * tab * hum * idle * tierBonus(economy, slotTier) * seconds;
+  return backgroundBaseRate(domain, economy, cacheCoreLevel) * tab * hum * idle * tierBonus(economy, slotTier) * seconds;
+}
+
+function vaultTrafficScale(domain, economy, cacheCoreLevel) {
+  const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
+  const trafficRatio = domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier);
+  return Math.pow(trafficRatio, economy.vaultTrafficExponent ?? 0.9);
+}
+
+function vaultUpgradeMultiplier(economy, upgradeLevel) {
+  const currentLevel = Math.max(0, Number(upgradeLevel || 0));
+  return 1
+    + (economy.vaultLinearMultiplier ?? 0.12) * currentLevel
+    + (economy.vaultPolyMultiplier ?? 0.005) * Math.pow(currentLevel, economy.vaultPolyExponent ?? 3);
 }
 
 function vaultCap(domain, economy, cacheCoreLevel) {
   const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
-  const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
-  return economy.baseRate * coreMultiplier * 60 * 25 * trafficScale * Math.pow(economy.coldStorageMultiplier || 1.32, level(domain, "coldStorage"));
+  return economy.baseRate * coreMultiplier * 60 * 25 * vaultTrafficScale(domain, economy, cacheCoreLevel) * vaultUpgradeMultiplier(economy, level(domain, "coldStorage"));
 }
 
 function vaultRate(domain, economy, cacheCoreLevel) {
   const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
-  const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
-  return economy.vaultRate * coreMultiplier * trafficScale * Math.pow(1.3, level(domain, "storageDuration"));
+  return economy.vaultRate * coreMultiplier * vaultTrafficScale(domain, economy, cacheCoreLevel) * vaultUpgradeMultiplier(economy, level(domain, "storageDuration"));
 }
 
 function dailyFirstOpenValue(domain, economy, slotTierBonusValue, cacheCoreLevel) {
   const dailyBoot = level(domain, "dailyBoot");
-  const baseDaily = Math.max(20, domainBaseRate(domain, economy, cacheCoreLevel) * 60 * 35);
+  const baseDaily = Math.max(20, domainBaseRate(domain, economy, cacheCoreLevel) * 60 * (economy.dailyBaseMinutes ?? 60));
   const bootMultiplier = 1 + 0.18 * dailyBoot;
   const streak = Math.min(domain.currentStreak, 14);
-  const streakMultiplier = 1 + streak * 0.05 + dailyBoot * streak * 0.01;
+  const bootAssist = 1 + (economy.dailyStreakBootMultiplier ?? 0.2) * Math.sqrt(dailyBoot);
+  const streakMultiplier = 1 + (economy.dailyStreakBaseMultiplier ?? 0.04) * streak * bootAssist;
   return baseDaily * bootMultiplier * streakMultiplier * slotTierBonusValue;
 }
 
@@ -437,6 +484,14 @@ function spendPrestigeOnCacheCore(state, economy) {
 }
 
 function resetForPrestige(state, economy, day) {
+  if (state.prestigeCount < 1 && state.totalLifetimeEarned < (economy.firstPrestigeLifetimeRequirement ?? 10000000)) {
+    state.warnings.push({
+      day,
+      type: "prestige_locked",
+      message: "First prestige skipped; lifetime earnings below $" + (economy.firstPrestigeLifetimeRequirement ?? 10000000) + "."
+    });
+    return null;
+  }
   const totalPrestige = prestigeTotalFromLifetime(state.totalLifetimeEarned, economy.prestigeDivisor);
   const award = Math.max(0, totalPrestige - state.cpAlreadyClaimedFromLifetime);
   state.cachePoints += award;
@@ -476,13 +531,14 @@ function normalizePrestigeResetDays(config) {
 }
 
 function simulateEconomy(economy, config) {
+  const startingCash = Math.max(0, Number(config.startingCash || 0));
   const state = {
     config: {
       ...config,
       maxUpgradePurchasesPerPeriod: config.maxUpgradePurchasesPerPeriod || 2000
     },
-    balance: 0,
-    totalLifetimeEarned: 0,
+    balance: startingCash,
+    totalLifetimeEarned: startingCash,
     totalSpent: 0,
     cachePoints: 0,
     cpAlreadyClaimedFromLifetime: 0,
@@ -501,6 +557,7 @@ function simulateEconomy(economy, config) {
   const resetDays = normalizePrestigeResetDays(config);
   const periodsPerDay = Math.max(1, Math.floor(config.vaultClaimsPerDay));
   const periodSeconds = 86400 / periodsPerDay;
+  spendAvailableMoney(state, economy, 0);
   for (let day = 1; day <= config.days; day += 1) {
     state.dailyBuckets = { focus: 0, background: 0, vaultAccrued: 0, vaultClaimed: 0, dailyBonus: 0, navigation: 0, wake: 0 };
     for (let period = 1; period <= periodsPerDay; period += 1) {
@@ -516,12 +573,12 @@ function simulateEconomy(economy, config) {
         if (config.enableNavigationBonus && config.navigationEventsPerFocusedHour > 0) {
           const events = (focusSecondsPerDomain / 3600) * config.navigationEventsPerFocusedHour;
           const navLevel = level(domain, "navigationBonus");
-          const amount = navLevel > 0 ? dailyFirstOpenValue(domain, economy, tierBonus(economy, slot.tier), state.cacheCoreLevel) * 0.07 * (1 + 0.18 * navLevel) * events : 0;
+          const amount = navLevel > 0 ? activeRate(domain, economy, slot.tier, state.cacheCoreLevel) * (economy.navigationEventSeconds ?? 7) * Math.sqrt(navLevel) * events : 0;
           addEarnings(state, domain, amount, "navigation");
         }
         if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {
           const events = config.wakeEventsPerDomainPerDay / periodsPerDay;
-          addEarnings(state, domain, domainBaseRate(domain, economy, state.cacheCoreLevel) * 65 * Math.pow(level(domain, "wakeBonus"), 1.1) * tierBonus(economy, slot.tier) * events, "wake");
+          addEarnings(state, domain, domainBaseRate(domain, economy, state.cacheCoreLevel) * (economy.wakeBurstSeconds ?? 105) * Math.pow(level(domain, "wakeBonus"), 1.1) * tierBonus(economy, slot.tier) * events, "wake");
         }
         const payout = claimVault(domain, economy, slot.tier, currentHour, day, config.includeDailyBonus, state.cacheCoreLevel);
         addEarnings(state, domain, payout.vault, "vaultClaimed");
@@ -788,6 +845,7 @@ function readConfig(form) {
     focusMinutesPerDay: Math.max(0, readNumber(form, "focusHours", 2) * 60),
     backgroundMinutesPerOtherSlotPerDay: Math.max(0, readNumber(form, "backgroundHours", 0.25) * 60),
     vaultClaimsPerDay: Math.max(1, Math.floor(readNumber(form, "vaultClaimsPerDay", 3))),
+    startingCash: Math.max(0, readNumber(form, "startingCash", 0)),
     startingSlots: Math.max(1, Math.floor(readNumber(form, "startingSlots", 3))),
     includeDailyBonus: form.elements.includeDailyBonus.checked,
     enableNavigationBonus: form.elements.enableNavigationBonus.checked || navigationEventsPerFocusedHour > 0,
@@ -805,7 +863,16 @@ function readEconomy(form) {
   const economy = structuredClone(initialEconomy);
   economy.baseRate = Math.max(0, readNumber(form, "baseRate", economy.baseRate));
   economy.vaultRate = Math.max(0, readNumber(form, "vaultRate", economy.vaultRate));
-  economy.coldStorageMultiplier = Math.max(1, readNumber(form, "coldStorageMultiplier", economy.coldStorageMultiplier || 1.32));
+  economy.vaultLinearMultiplier = Math.max(0, readNumber(form, "vaultLinearMultiplier", economy.vaultLinearMultiplier ?? 0.12));
+  economy.vaultPolyMultiplier = Math.max(0, readNumber(form, "vaultPolyMultiplier", economy.vaultPolyMultiplier ?? 0.005));
+  economy.vaultPolyExponent = Math.max(1, readNumber(form, "vaultPolyExponent", economy.vaultPolyExponent ?? 3));
+  economy.vaultTrafficExponent = Math.max(0, readNumber(form, "vaultTrafficExponent", economy.vaultTrafficExponent ?? 0.9));
+  economy.backgroundTrafficExponent = Math.max(0, readNumber(form, "backgroundTrafficExponent", economy.backgroundTrafficExponent ?? 0.9));
+  economy.dailyBaseMinutes = Math.max(0, readNumber(form, "dailyBaseMinutes", economy.dailyBaseMinutes ?? 60));
+  economy.dailyStreakBaseMultiplier = Math.max(0, readNumber(form, "dailyStreakBaseMultiplier", economy.dailyStreakBaseMultiplier ?? 0.04));
+  economy.dailyStreakBootMultiplier = Math.max(0, readNumber(form, "dailyStreakBootMultiplier", economy.dailyStreakBootMultiplier ?? 0.2));
+  economy.navigationEventSeconds = Math.max(0, readNumber(form, "navigationEventSeconds", economy.navigationEventSeconds ?? 18));
+  economy.wakeBurstSeconds = Math.max(0, readNumber(form, "wakeBurstSeconds", economy.wakeBurstSeconds ?? 105));
   economy.trafficEngineMultiplier = Math.max(1, readNumber(form, "trafficEngineMultiplier", economy.trafficEngineMultiplier));
   economy.prestigeDivisor = Math.max(1, readNumber(form, "prestigeDivisor", economy.prestigeDivisor));
   economy.slotPrestigeCostScale = Math.max(1, readNumber(form, "slotPrestigeCostScale", economy.slotPrestigeCostScale || 1));

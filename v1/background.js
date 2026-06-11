@@ -5,6 +5,7 @@ const {
   UPGRADE_DEFS,
   SLOT_TIERS,
   SLOT_PRESTIGE_COST_SCALE,
+  FIRST_PRESTIGE_LIFETIME_REQUIREMENT,
   SUPPORTER_CORE_MULTIPLIER,
   emptyUpgrades,
   toSci,
@@ -31,10 +32,23 @@ const EXTPAY_EXTENSION_ID = "browser-tycoon";
 const SUPPORTER_CORE_PLAN = "supporter-core";
 const PREMIUM_STATUS_MAX_AGE_MS = 10 * 60 * 1000;
 const ALARM_NAME = "browser-tycoon-accrual";
+const NOTIFICATION_ALARM_NAME = "browser-tycoon-notifications";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
 const WELCOME_BACK_MIN_SECONDS = 60;
 const EVENT_BONUS_COOLDOWN_MS = 60 * 1000;
 const ONBOARDING_STARTER_CASH = 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const NOTIFICATION_IDS = {
+  vaultFull: "browser-tycoon:vault-full",
+  bigPayout: "browser-tycoon:big-payout",
+  streakRisk: "browser-tycoon:streak-risk"
+};
+const DEFAULT_NOTIFICATION_SETTINGS = Object.freeze({
+  enabled: false,
+  vaultFull: true,
+  bigPayout: true,
+  streakRisk: true
+});
 
 function makeExtPay() {
   return typeof ExtPay === "function" ? ExtPay(EXTPAY_EXTENSION_ID) : null;
@@ -70,6 +84,7 @@ function defaultSyncState() {
     onboardingComplete: false,
     onboardingStep: "intro",
     onboardingStarterCashClaimed: false,
+    notificationSettings: null,
     slots: [1, 2, 3].map((id) => ({
       id,
       tier: 0,
@@ -97,7 +112,40 @@ function defaultLocalState() {
     lastWakeBonusAt: {},
     lastPopupSeenAt: 0,
     lastPopupBalance: null,
-    pendingWelcomeBack: null
+    pendingWelcomeBack: null,
+    notificationState: {
+      vaultFullNotified: false,
+      lastBigPayoutCheckAt: 0,
+      lastBigPayoutNotificationAt: 0,
+      lastStreakRiskDate: null
+    }
+  };
+}
+
+function normalizeNotificationSettings(settings, onboardingComplete = false) {
+  if (!settings || typeof settings !== "object") {
+    return {
+      ...DEFAULT_NOTIFICATION_SETTINGS,
+      enabled: Boolean(onboardingComplete)
+    };
+  }
+  const anyTypeEnabled = settings.vaultFull !== false || settings.bigPayout !== false || settings.streakRisk !== false;
+  return {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    ...settings,
+    enabled: anyTypeEnabled,
+    vaultFull: settings.vaultFull !== false,
+    bigPayout: settings.bigPayout !== false,
+    streakRisk: settings.streakRisk !== false
+  };
+}
+
+function normalizeNotificationState(state) {
+  return {
+    vaultFullNotified: Boolean(state?.vaultFullNotified),
+    lastBigPayoutCheckAt: Number(state?.lastBigPayoutCheckAt || 0),
+    lastBigPayoutNotificationAt: Number(state?.lastBigPayoutNotificationAt || 0),
+    lastStreakRiskDate: state?.lastStreakRiskDate || null
   };
 }
 
@@ -118,8 +166,10 @@ async function getState() {
   }
   if (!Number.isFinite(sync.cacheCredits)) sync.cacheCredits = 0;
   if (!Number.isFinite(sync.ccAlreadyClaimedFromLifetime)) sync.ccAlreadyClaimedFromLifetime = 0;
+  sync.notificationSettings = normalizeNotificationSettings(sync.notificationSettings, sync.onboardingComplete);
   sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
   const local = { ...defaultLocalState(), ...localRaw };
+  local.notificationState = normalizeNotificationState(local.notificationState);
   normalizeCurrencyState(sync, local);
   return { sync, local };
 }
@@ -137,6 +187,7 @@ async function saveState(sync, local) {
       onboardingComplete: sync.onboardingComplete,
       onboardingStep: sync.onboardingStep,
       onboardingStarterCashClaimed: sync.onboardingStarterCashClaimed,
+      notificationSettings: sync.notificationSettings,
       slots: sync.slots,
       compactDomains: sync.compactDomains
     }),
@@ -149,29 +200,48 @@ async function saveState(sync, local) {
       lastWakeBonusAt: local.lastWakeBonusAt,
       lastPopupSeenAt: local.lastPopupSeenAt,
       lastPopupBalance: local.lastPopupBalance,
-      pendingWelcomeBack: local.pendingWelcomeBack
+      pendingWelcomeBack: local.pendingWelcomeBack,
+      notificationState: local.notificationState
     })
   ]);
 }
 
-async function saveOnboardingState(sync, complete, step, { grantStarterCash = false } = {}) {
+async function saveOnboardingState(sync, complete, step, { grantStarterCash = false, resetStarterCash = false } = {}) {
   const nextComplete = Boolean(complete);
   const nextStep = step || (nextComplete ? "complete" : "intro");
+  const nextStarterCashClaimed = resetStarterCash ? false : sync.onboardingStarterCashClaimed;
   const shouldGrantStarterCash = grantStarterCash && !sync.onboardingStarterCashClaimed;
-  if (sync.onboardingComplete === nextComplete && sync.onboardingStep === nextStep && !shouldGrantStarterCash) {
+  const shouldEnableNotifications = nextComplete && !sync.onboardingComplete;
+  if (
+    sync.onboardingComplete === nextComplete &&
+    sync.onboardingStep === nextStep &&
+    sync.onboardingStarterCashClaimed === nextStarterCashClaimed &&
+    !shouldGrantStarterCash &&
+    !shouldEnableNotifications
+  ) {
     return;
   }
   sync.onboardingComplete = nextComplete;
   sync.onboardingStep = nextStep;
+  sync.onboardingStarterCashClaimed = nextStarterCashClaimed;
+  if (shouldEnableNotifications) {
+    sync.notificationSettings = {
+      ...normalizeNotificationSettings(sync.notificationSettings, false),
+      enabled: true
+    };
+  }
   if (shouldGrantStarterCash) {
     sync.balance = sciAdd(sync.balance, ONBOARDING_STARTER_CASH);
+    sync.totalLifetimeEarned = sciAdd(sync.totalLifetimeEarned, ONBOARDING_STARTER_CASH);
     sync.onboardingStarterCashClaimed = true;
   }
   await chrome.storage.sync.set({
     balance: sync.balance,
+    totalLifetimeEarned: sync.totalLifetimeEarned,
     onboardingComplete: sync.onboardingComplete,
     onboardingStep: sync.onboardingStep,
-    onboardingStarterCashClaimed: sync.onboardingStarterCashClaimed
+    onboardingStarterCashClaimed: sync.onboardingStarterCashClaimed,
+    notificationSettings: sync.notificationSettings
   });
 }
 
@@ -647,6 +717,121 @@ function formatBadgeIncome(value) {
   return `${rounded}${suffixes[suffixIndex]}`;
 }
 
+function formatNotificationMoney(value) {
+  const sci = toSci(value);
+  if (sci.m === 0) return "$0.00";
+  if (sci.e < 3) return `$${sciToNumber(sci).toFixed(2)}`;
+  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+  const suffix = Math.floor(sci.e / 3);
+  if (suffix > 0 && suffix < suffixes.length) {
+    const amount = sci.m * Math.pow(10, sci.e - suffix * 3);
+    return `$${amount.toFixed(2)}${suffixes[suffix]}`;
+  }
+  return `$${sci.m.toFixed(2)}e${sci.e}`;
+}
+
+function sciMulScalar(value, scalar) {
+  const sci = toSci(value);
+  if (sci.m === 0 || !Number.isFinite(scalar) || scalar <= 0) return { ...SCI_ZERO };
+  return toSci({ m: sci.m * scalar, e: sci.e });
+}
+
+function slottedDomains(sync, local) {
+  return sync.slots
+    .filter((slot) => slot.assignedDomain)
+    .map((slot) => ({
+      slot,
+      entry: getDomainEntry(local, slot.assignedDomain)
+    }));
+}
+
+function allVaultsFull(sync, local) {
+  const domains = slottedDomains(sync, local);
+  if (!domains.length) return false;
+  const premiumMultiplier = supporterCoreMultiplier(local);
+  return domains.every(({ slot, entry }) => {
+    return sciCompare(entry.vaultAmount, vaultCap(entry, undefined, sync.cacheCoreLevel, premiumMultiplier)) >= 0;
+  });
+}
+
+function streakRiskDomains(sync, local, now) {
+  const today = localDateKey(now);
+  return slottedDomains(sync, local).filter(({ entry }) => {
+    return Number(entry.currentStreak || 0) >= 3 && entryVisitDate(entry) !== today;
+  });
+}
+
+async function notifyPlayer(id, title, message) {
+  await chrome.notifications.create(id, {
+    type: "basic",
+    iconUrl: "icons/Icon14_40.png",
+    title,
+    message,
+    priority: 1
+  });
+}
+
+async function maybeSendEngagementNotifications() {
+  const { sync, local } = await settleAndSave();
+  const settings = normalizeNotificationSettings(sync.notificationSettings, sync.onboardingComplete);
+  const memory = normalizeNotificationState(local.notificationState);
+  local.notificationState = memory;
+  const now = Date.now();
+  let changed = false;
+
+  if (!settings.enabled || !sync.onboardingComplete) {
+    await chrome.storage.local.set({ notificationState: local.notificationState });
+    return;
+  }
+
+  const fullVaults = allVaultsFull(sync, local);
+  if (settings.vaultFull && fullVaults && !memory.vaultFullNotified) {
+    await notifyPlayer(
+      NOTIFICATION_IDS.vaultFull,
+      "All vaults are full",
+      "Your domains are capped. Open Browser Tycoon and collect before more cash gets boxed out."
+    );
+    memory.vaultFullNotified = true;
+    changed = true;
+  } else if (!fullVaults && memory.vaultFullNotified) {
+    memory.vaultFullNotified = false;
+    changed = true;
+  }
+
+  if (settings.bigPayout && now - Number(local.lastPopupSeenAt || 0) >= DAY_MS && now - memory.lastBigPayoutCheckAt >= DAY_MS) {
+    const payout = local.lastPopupBalance ? sciSub(sync.balance, local.lastPopupBalance) : SCI_ZERO;
+    const threshold = sciMulScalar(sync.balance, 0.2);
+    memory.lastBigPayoutCheckAt = now;
+    changed = true;
+    if (sciCompare(payout, threshold) >= 0 && sciCompare(payout, 0) > 0) {
+      await notifyPlayer(
+        NOTIFICATION_IDS.bigPayout,
+        `${formatNotificationMoney(payout)} is waiting`,
+        "Your browsing empire has been working for a day. Open Browser Tycoon to collect and upgrade."
+      );
+      memory.lastBigPayoutNotificationAt = now;
+    }
+  }
+
+  const localHour = Number(new Date(now).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit" }));
+  const today = localDateKey(now);
+  if (settings.streakRisk && localHour >= 19 && memory.lastStreakRiskDate !== today) {
+    const atRisk = streakRiskDomains(sync, local, now);
+    if (atRisk.length) {
+      const domain = atRisk[0].entry.domain;
+      await notifyPlayer(
+        NOTIFICATION_IDS.streakRisk,
+        "A streak is at risk",
+        `${domain} has a ${atRisk[0].entry.currentStreak}-day streak. Visit a slotted domain today to keep it alive.`
+      );
+      memory.lastStreakRiskDate = today;
+      changed = true;
+    }
+  }
+
+  if (changed) await chrome.storage.local.set({ notificationState: local.notificationState });
+}
+
 function currentIncomePerSecond(sync, library, presence, premiumMultiplier = 1) {
   const incomes = currentSlotIncomes(sync, library, presence, Date.now(), premiumMultiplier);
   return Object.values(incomes).reduce((sum, value) => sum + value, 0);
@@ -668,6 +853,7 @@ async function getSnapshot() {
   const activeTab = await activeTabInEligibleWindow();
   const currentDomain = normalizeDomainFromUrl(activeTab?.url);
   const now = Date.now();
+  const balanceGainSinceLastPopup = local.lastPopupBalance ? sciSub(sync.balance, local.lastPopupBalance) : SCI_ZERO;
   const welcomeBack = updateWelcomeBack(sync, local, now);
   await saveState(sync, local);
   const premiumMultiplier = supporterCoreMultiplier(local);
@@ -697,6 +883,7 @@ async function getSnapshot() {
     now,
     slotIncomes,
     welcomeBack,
+    balanceGainSinceLastPopup,
     incomePerSecond: Object.values(slotIncomes).reduce((sum, value) => sum + value, 0),
     nextSlotCost: slotUnlockCost(sync.unlockedSlots + 1),
     today: TODAY(),
@@ -843,6 +1030,8 @@ async function claimRevisit(domain) {
   const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel, supporterCoreMultiplier(local));
   if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
   entry.vaultAmount = { ...SCI_ZERO };
+  local.notificationState = normalizeNotificationState(local.notificationState);
+  local.notificationState.vaultFullNotified = false;
   addEarnings(sync, entry, payout.total);
   await saveState(sync, local);
   return { ok: true, payout };
@@ -890,6 +1079,12 @@ async function upgradeCacheCore() {
 
 async function clearCachePrestige() {
   const { sync, local } = await settleAndSave();
+  if (Number(sync.prestigeCount || 0) < 1 && sciCompare(sync.totalLifetimeEarned, FIRST_PRESTIGE_LIFETIME_REQUIREMENT) < 0) {
+    return {
+      ok: false,
+      error: `First Clear Cache unlocks at $${FIRST_PRESTIGE_LIFETIME_REQUIREMENT.toLocaleString()} lifetime earnings.`
+    };
+  }
   const cpTotal = prestigeTotalFromLifetime(sync.totalLifetimeEarned);
   const award = Math.max(0, cpTotal - sync.ccAlreadyClaimedFromLifetime);
   sync.cacheCredits += award;
@@ -975,6 +1170,27 @@ async function forceRefreshPremiumStatus() {
   };
 }
 
+async function updateNotificationSettings(patch = {}) {
+  const { sync, local } = await getState();
+  const cleaned = Object.fromEntries(
+    Object.entries(patch || {})
+      .filter(([key]) => key in DEFAULT_NOTIFICATION_SETTINGS)
+      .map(([key, value]) => [key, Boolean(value)])
+  );
+  if ("enabled" in cleaned) {
+    cleaned.vaultFull = cleaned.enabled;
+    cleaned.bigPayout = cleaned.enabled;
+    cleaned.streakRisk = cleaned.enabled;
+  }
+  sync.notificationSettings = {
+    ...normalizeNotificationSettings(sync.notificationSettings, sync.onboardingComplete),
+    ...cleaned
+  };
+  sync.notificationSettings = normalizeNotificationSettings(sync.notificationSettings, sync.onboardingComplete);
+  await saveState(sync, local);
+  return { ok: true, notificationSettings: sync.notificationSettings };
+}
+
 async function navigationBonus(details) {
   if (details.frameId !== 0) return;
   const domain = normalizeDomainFromUrl(details.url);
@@ -1032,15 +1248,37 @@ function scheduleSettle(delay = 0) {
   }, delay);
 }
 
-chrome.runtime.onInstalled.addListener(async () => {
+async function ensureAlarms() {
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
+  await chrome.alarms.create(NOTIFICATION_ALARM_NAME, { periodInMinutes: 60 });
+}
+
+async function openTycoonFromNotification(notificationId) {
+  if (!Object.values(NOTIFICATION_IDS).includes(notificationId)) return;
+  await chrome.notifications.clear(notificationId);
+  if (chrome.action?.openPopup) {
+    try {
+      await chrome.action.openPopup();
+      return;
+    } catch (_error) {}
+  }
+  await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  await ensureAlarms();
   await settleAndSave();
 });
 
-chrome.runtime.onStartup.addListener(() => settleAndSave());
+chrome.runtime.onStartup.addListener(async () => {
+  await ensureAlarms();
+  await settleAndSave();
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) settleAndSave();
+  if (alarm.name === NOTIFICATION_ALARM_NAME) maybeSendEngagementNotifications();
 });
+chrome.notifications.onClicked.addListener(openTycoonFromNotification);
 chrome.tabs.onActivated.addListener(() => settleAndSave());
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.status === "complete") settleAndSave();
@@ -1081,6 +1319,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "openPremiumPayment") return openPremiumPayment();
       if (message.type === "openPremiumLogin") return openPremiumLogin();
       if (message.type === "refreshPremiumStatus") return forceRefreshPremiumStatus();
+      if (message.type === "updateNotificationSettings") return updateNotificationSettings(message.settings);
       if (message.type === "completeOnboarding") {
         const { sync } = await getState();
         const alreadyClaimed = Boolean(sync.onboardingStarterCashClaimed);
@@ -1089,11 +1328,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.type === "resetOnboarding") {
         const { sync } = await getState();
-        await saveOnboardingState(sync, false, "intro");
+        await saveOnboardingState(sync, false, "intro", { resetStarterCash: true });
         return { ok: true };
       }
       if (message.type === "setOnboardingStep") {
         const { sync } = await getState();
+        if (sync.onboardingComplete) return { ok: true, ignored: true };
         await saveOnboardingState(sync, false, message.step || "intro");
         return { ok: true };
       }

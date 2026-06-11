@@ -21,12 +21,20 @@ let toastTimer = null;
 let modal = null;
 let collectBurst = null;
 let collectBurstTimer = null;
+let balanceRoll = null;
+let balanceRollFrame = null;
 
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
 const BUY_MODES = ["1", "10"];
 const {
   BASE_RATE,
   TRAFFIC_ENGINE_MULTIPLIER,
+  FIRST_PRESTIGE_LIFETIME_REQUIREMENT,
+  VAULT_TRAFFIC_EXPONENT,
+  BACKGROUND_TRAFFIC_EXPONENT,
+  DAILY_BASE_MINUTES,
+  NAVIGATION_EVENT_SECONDS,
+  WAKE_BURST_SECONDS,
   toSci,
   sciToNumber,
   sciCompare,
@@ -45,8 +53,10 @@ const {
   domainBaseRate: mathDomainBaseRate,
   tabMultiplier,
   focusMultiplier,
+  coldStorageMultiplier,
   vaultPumpMultiplier,
   dailyBootMultiplier,
+  dailyStreakMultiplier,
   activeIncomePerSecond: mathActiveIncomePerSecond,
   backgroundIncomePerSecond: mathBackgroundIncomePerSecond,
   dailyFirstOpenBonus: mathDailyFirstOpenBonus,
@@ -62,10 +72,35 @@ function send(type, payload = {}) {
   }));
 }
 
+function isValidSnapshot(value) {
+  return Boolean(
+    value?.sync &&
+    value?.local &&
+    Array.isArray(value.sync.slots) &&
+    value.local.domainLibrary &&
+    value.local.presence
+  );
+}
+
 async function refresh({ full = false } = {}) {
-  snapshot = await send("snapshot");
+  const nextSnapshot = await send("snapshot");
+  if (!isValidSnapshot(nextSnapshot)) {
+    if (!snapshot) {
+      renderLoadError(nextSnapshot?.error || "Could not load game state.");
+    } else {
+      showToast(nextSnapshot?.error || "Could not refresh game state.", "warning");
+    }
+    return;
+  }
+  const shouldAnimateOpeningGain =
+    full &&
+    !snapshot &&
+    displaysAsPositiveMoney(nextSnapshot.balanceGainSinceLastPopup || 0) &&
+    !(nextSnapshot.welcomeBack && sciCompare(nextSnapshot.welcomeBack.total, 0) > 0);
+  snapshot = nextSnapshot;
   syncWelcomeBackModal();
   resetLiveTickerBaseline();
+  if (shouldAnimateOpeningGain) showCollectBurst(nextSnapshot.balanceGainSinceLastPopup);
   if (full || !lastRenderedRouteKey) {
     render();
   } else {
@@ -83,12 +118,39 @@ function liveBalance() {
   return sciAdd(liveBaseBalance, ((Date.now() - liveBaseAt) / 1000) * liveIncomePerSecond);
 }
 
+function easeOutCubic(value) {
+  return 1 - Math.pow(1 - value, 3);
+}
+
+function balanceRollValue() {
+  if (!balanceRoll) return null;
+  const progress = Math.min(1, (Date.now() - balanceRoll.startedAt) / balanceRoll.duration);
+  if (progress >= 1) return balanceRoll.to;
+  const eased = easeOutCubic(progress);
+  if (balanceRoll.from.e < 15 && balanceRoll.to.e < 15) {
+    const from = sciToNumber(balanceRoll.from);
+    const to = sciToNumber(balanceRoll.to);
+    return toSci(from + (to - from) * eased);
+  }
+  if (balanceRoll.from.e === balanceRoll.to.e) {
+    return toSci({
+      m: balanceRoll.from.m + (balanceRoll.to.m - balanceRoll.from.m) * eased,
+      e: balanceRoll.to.e
+    });
+  }
+  return eased < 0.72 ? balanceRoll.from : balanceRoll.to;
+}
+
+function displayBalance() {
+  return balanceRollValue() || liveBalance();
+}
+
 function startLiveTicker() {
   if (tickerStarted) return;
   tickerStarted = true;
   setInterval(() => {
-    if (!snapshot) return;
-    setText("balance", money(liveBalance()));
+    if (!isValidSnapshot(snapshot)) return;
+    setText("balance", money(displayBalance()));
     setText("income", `+${money(liveIncomePerSecond)}/sec`);
     patchAffordability(liveBalance());
   }, 250);
@@ -100,6 +162,18 @@ function setText(field, value) {
   });
 }
 
+function syncCollectBurstNode() {
+  app.querySelectorAll("[data-field='collectBurst']").forEach((node) => {
+    if (collectBurst && displaysAsPositiveMoney(collectBurst)) {
+      node.textContent = `+${money(collectBurst)}`;
+      node.hidden = false;
+    } else {
+      node.textContent = "";
+      node.hidden = true;
+    }
+  });
+}
+
 function setDisabled(selector, disabled) {
   app.querySelectorAll(selector).forEach((node) => {
     node.disabled = disabled;
@@ -107,9 +181,10 @@ function setDisabled(selector, disabled) {
 }
 
 function patchDynamicFields() {
-  if (!snapshot) return;
-  setText("balance", money(liveBalance()));
+  if (!isValidSnapshot(snapshot)) return;
+  setText("balance", money(displayBalance()));
   setText("income", `+${money(liveIncomePerSecond)}/sec`);
+  syncCollectBurstNode();
   setText("cacheCredits", cc(snapshot.sync.cacheCredits));
   setText("cacheCoreLevel", String(cacheCoreLevel()));
   patchSlots();
@@ -236,6 +311,10 @@ function money(value) {
   return `$${sci.m.toFixed(2)}e${sci.e}`;
 }
 
+function displaysAsPositiveMoney(value) {
+  return money(value) !== "$0.00";
+}
+
 function cc(value) {
   const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
   const sci = toSci(value);
@@ -330,6 +409,19 @@ function domainBaseRate(entry) {
   return mathDomainBaseRate(entry, cacheCoreLevel());
 }
 
+function backgroundBaseRateEstimate(entry) {
+  const trafficRatio = Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine"));
+  return BASE_RATE * cacheCoreMultiplier(cacheCoreLevel()) * Math.pow(trafficRatio, BACKGROUND_TRAFFIC_EXPONENT);
+}
+
+function vaultTrafficScaleEstimate(entry) {
+  return Math.pow(Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine")), VAULT_TRAFFIC_EXPONENT);
+}
+
+function dailyStreakMultiplierFor(entry, streak = entry?.currentStreak || 0) {
+  return dailyStreakMultiplier(streak, upgradeLevel(entry, "dailyBoot"));
+}
+
 function vaultCap(entry, coldLevel) {
   return mathVaultCap(entry, coldLevel, cacheCoreLevel(), supporterCoreMultiplier());
 }
@@ -407,20 +499,33 @@ function stateLabel(domain) {
 function currentRateTooltip(domain, entry, slot) {
   const presence = snapshot.local.presence[domain];
   const base = money(domainBaseRate(entry));
+  const cache = cacheCoreMultiplier(cacheCoreLevel()).toFixed(2);
+  const traffic = Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine")).toFixed(2);
   const tab = tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2);
   const tier = tierBonus(slot).toFixed(2);
   const supporter = supporterCorePaid() ? ` x supporter core (${supporterCoreMultiplier().toFixed(2)})` : "";
   if (presence?.state === "active") {
     const focus = focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2);
-    return `Active rate = base income (${base}/sec) x tab multiplier (${tab}) x focus bonus (${focus}) x slot multiplier (${tier})${supporter}.`;
+    return `Active rate = domain base (${base}/sec, global base x Cache Core ${cache} x Traffic Engine ${traffic}) x tab multiplier (${tab}) x focus bonus (${focus}) x slot multiplier (${tier})${supporter}.`;
   }
   if (presence?.state === "background") {
+    const backgroundBase = money(backgroundBaseRateEstimate(entry));
+    const backgroundTraffic = Math.pow(Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine")), BACKGROUND_TRAFFIC_EXPONENT).toFixed(2);
     const hum = (0.08 * upgradeLevel(entry, "backgroundHum")).toFixed(2);
     const idleSeconds = Math.max(0, (Date.now() - (presence.backgroundSince || Date.now())) / 1000);
     const idle = (1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5)).toFixed(2);
-    return `Background rate = base income (${base}/sec) x tab multiplier (${tab}) x background hum (${hum}) x idle depth (currently ${idle}) x slot multiplier (${tier})${supporter}.`;
+    return `Background rate = background base (${backgroundBase}/sec, global base x Cache Core ${cache} x Traffic contribution ${backgroundTraffic} from Traffic Engine^${BACKGROUND_TRAFFIC_EXPONENT.toFixed(2)}) x tab multiplier (${tab}) x background hum (${hum}) x idle depth (currently ${idle}) x slot multiplier (${tier})${supporter}.`;
   }
   return "Inactive: this domain is not currently open as an active or background tab, so its current rate is $0.00/sec.";
+}
+
+function vaultTooltip(entry) {
+  const cache = cacheCoreMultiplier(cacheCoreLevel()).toFixed(2);
+  const traffic = vaultTrafficScaleEstimate(entry).toFixed(2);
+  const pump = vaultPumpMultiplier(upgradeLevel(entry, "storageDuration")).toFixed(2);
+  const storage = coldStorageMultiplier(upgradeLevel(entry, "coldStorage")).toFixed(2);
+  const supporter = supporterCorePaid() ? ` x Supporter Core ${supporterCoreMultiplier().toFixed(2)}` : "";
+  return `Vault fill = vault base (${money(BASE_RATE * 0.02)}/sec) x Cache Core ${cache} x vault traffic ${traffic} x Vault Pump ${pump}${supporter}. Vault cap = global base (${money(BASE_RATE)}/sec) x Cache Core ${cache} x 25 minutes x vault traffic ${traffic} x Cold Storage ${storage}${supporter}. Collected vault pays the stored amount.`;
 }
 
 function favicon(domain, className = "slot-icon") {
@@ -441,6 +546,9 @@ function shell(content, activeNav = "slots") {
   app.querySelectorAll("[data-action]").forEach((node) => {
     node.addEventListener("click", handleAction);
   });
+  app.querySelectorAll("[data-notification-setting]").forEach((node) => {
+    node.addEventListener("change", handleNotificationToggle);
+  });
   const searchNode = app.querySelector("[data-search]");
   if (searchNode) {
     searchNode.value = search;
@@ -449,6 +557,13 @@ function shell(content, activeNav = "slots") {
       patchLibraryList();
     });
   }
+  app.querySelectorAll("[data-manual-domain]").forEach((node) => {
+    node.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      app.querySelector(`[data-action="assignTyped"][data-slot="${node.dataset.slot}"]`)?.click();
+    });
+  });
   lastRenderedRouteKey = nextRouteKey;
   if (scrollTop) {
     requestAnimationFrame(() => {
@@ -462,6 +577,7 @@ function shell(content, activeNav = "slots") {
 
 function renderModal() {
   if (modal?.name === "welcomeBack") return renderWelcomeBackModal();
+  if (modal?.name === "settings") return renderSettingsModal();
   if (modal?.name === "slotUpgradeList") return renderSlotUpgradeListModal();
   if (modal?.name === "slotUpgradeDetail") return renderSlotUpgradeDetailModal(modal.slotId);
   if (modal?.name === "swapDomain") return renderSwapDomainModal();
@@ -472,19 +588,77 @@ function renderModal() {
   if (modal?.name === "devInput") return renderDevInputModal();
   if (modal !== "prestige") return "";
   const award = prestigeAwardEstimate();
+  const firstPrestigeLocked = isFirstPrestigeLocked();
+  const progress = firstPrestigeProgress();
   return `
     <div class="modal-scrim" role="presentation">
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="prestigeTitle">
         <div class="modal-kicker">PRESTIGE RESET</div>
         <h2 id="prestigeTitle">CLEAR CACHE?</h2>
-        <p>Reset cash, upgrades, vaults, and streaks. Slot prestige tiers stay, and tiered slots remain permanently unlocked.</p>
-        <div class="modal-reward">
+        <p>${firstPrestigeLocked ? `Reach ${money(FIRST_PRESTIGE_LIFETIME_REQUIREMENT)} lifetime earnings to unlock your first Clear Cache.` : "Reset cash, upgrades, vaults, and streaks. Slot prestige tiers stay, and tiered slots remain permanently unlocked."}</p>
+        ${firstPrestigeLocked ? `
+          <div class="prestige-lock">
+            <div class="prestige-lock-row">
+              <span>LIFETIME PROGRESS</span>
+              <strong>${money(snapshot.sync.totalLifetimeEarned)} / ${money(FIRST_PRESTIGE_LIFETIME_REQUIREMENT)}</strong>
+            </div>
+            <div class="prestige-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(progress * 100)}">
+              <div class="prestige-progress-fill" style="width:${Math.max(0, Math.min(100, progress * 100)).toFixed(1)}%"></div>
+            </div>
+          </div>
+        ` : ""}
+        ${firstPrestigeLocked ? "" : `<div class="modal-reward">
           <span>CACHE CREDITS</span>
           <strong>+${cc(award)} CC</strong>
-        </div>
+        </div>`}
         <div class="modal-actions">
           <button class="btn" data-action="cancelModal">CANCEL</button>
-          <button class="btn btn-prestige" data-action="confirmPrestige">CLEAR CACHE</button>
+          <button class="btn btn-prestige" data-action="confirmPrestige" ${firstPrestigeLocked ? "disabled" : ""}>${firstPrestigeLocked ? "LOCKED" : "CLEAR CACHE"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function notificationSettings() {
+  const settings = {
+    enabled: false,
+    vaultFull: true,
+    bigPayout: true,
+    streakRisk: true,
+    ...(snapshot?.sync?.notificationSettings || {})
+  };
+  settings.enabled = Boolean(settings.vaultFull || settings.bigPayout || settings.streakRisk);
+  return settings;
+}
+
+function renderNotificationToggle(key, label, detail) {
+  const settings = notificationSettings();
+  return `
+    <label class="settings-toggle">
+      <span>
+        <strong>${label}</strong>
+        <small>${detail}</small>
+      </span>
+      <input type="checkbox" data-notification-setting="${key}" ${settings[key] ? "checked" : ""}>
+    </label>
+  `;
+}
+
+function renderSettingsModal() {
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="modal-kicker">SETTINGS</div>
+        <h2 id="settingsTitle">GAME ALERTS</h2>
+        <div class="settings-list">
+          ${renderNotificationToggle("enabled", "Allow notifications", "Turn this off to disable every notification type, or turn it on to enable all three.")}
+          ${renderNotificationToggle("vaultFull", "All vaults full", "Send once when every assigned vault is full, then wait until you collect.")}
+          ${renderNotificationToggle("bigPayout", "Big payout", "After 24 hours away, notify if waiting cash is at least 20% of your balance.")}
+          ${renderNotificationToggle("streakRisk", "Streak at risk", "At 7 PM, warn if a slotted domain has a 3+ day streak unvisited today.")}
+        </div>
+        <div class="modal-actions single">
+          <button class="btn btn-prestige" data-action="cancelModal">DONE</button>
         </div>
       </section>
     </div>
@@ -821,6 +995,8 @@ function renderDomainDetailsModal(domain, source = "slot") {
   const nextStreak = Math.min(currentStreak + 1, 14);
   const navLevel = upgradeLevel(entry, "navigationBonus");
   const wakeLevel = upgradeLevel(entry, "wakeBonus");
+  const dailyBootLevel = upgradeLevel(entry, "dailyBoot");
+  const slotStreak = slot?.streakBonusTier || 0;
   return `
     <div class="modal-scrim" role="presentation">
       <section class="modal-panel detail-modal" role="dialog" aria-modal="true" aria-labelledby="domainDetailsTitle">
@@ -835,24 +1011,33 @@ function renderDomainDetailsModal(domain, source = "slot") {
             ["Inactive", "$0.00/sec"]
           ])}
           ${renderDetailStatSection("EVENT BONUSES", [
-            ["Navigation", navLevel > 0 ? money(navigationPayoutForLevel(entry, slot, navLevel)) : "LOCKED"],
-            ["Wake Burst", wakeLevel > 0 ? money(wakeBurstForLevel(entry, slot, wakeLevel)) : "LOCKED"]
+            ["Navigation / event", navLevel > 0 ? money(navigationPayoutForLevel(entry, slot, navLevel)) : "LOCKED"],
+            ["Nav Formula", navLevel > 0 ? `active/s x ${NAVIGATION_EVENT_SECONDS}s x sqrt(${navLevel})` : "LOCKED"],
+            ["Wake / event", wakeLevel > 0 ? money(wakeBurstForLevel(entry, slot, wakeLevel)) : "LOCKED"],
+            ["Wake Formula", wakeLevel > 0 ? `base/s x ${WAKE_BURST_SECONDS}s x level^1.1` : "LOCKED"]
           ])}
           ${renderDetailStatSection("VAULT + STREAK", [
             ["Vault Stored", money(entry.vaultAmount)],
             ["Vault Cap", money(vaultCap(entry))],
             ["Vault Fill", `${money(vaultRate(entry))}/sec`],
             ["Daily First-Open", money(dailyFirstOpenBonus(entry, slot))],
-            ["Next Streak Mult", `x${(1 + nextStreak * 0.05 + upgradeLevel(entry, "dailyBoot") * nextStreak * 0.01).toFixed(2)}`],
+            ["Daily Base", `${money(Math.max(20, domainBaseRate(entry) * 60 * DAILY_BASE_MINUTES) * supporterCoreMultiplier())}`],
+            ["Daily Boot", `x${dailyBootMultiplier(dailyBootLevel).toFixed(2)}`],
+            ["Streak Mult", `x${dailyStreakMultiplierFor(entry, currentStreak).toFixed(2)}`],
+            ["Next Streak Mult", `x${dailyStreakMultiplierFor(entry, nextStreak).toFixed(2)}`],
+            ["Slot Streak", `x${(1 + slotStreak * 0.15).toFixed(2)}`],
             ["Next Daily Bonus", money(dailyFirstOpenBonusForStreak(entry, slot, nextStreak))]
           ])}
           ${renderDetailStatSection("MULTIPLIERS", [
             ["Base Income", `${money(domainBaseRate(entry))}/sec`],
+            ["Background Base", `${money(backgroundBaseRateEstimate(entry))}/sec`],
+            ["Traffic Scale", `x${Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine")).toFixed(2)}`],
+            ["Vault Traffic", `x${vaultTrafficScaleEstimate(entry).toFixed(2)}`],
             ["Slot Tier", `x${tierBonus(slot).toFixed(2)}`],
             ...supporterCoreDetailRow(),
             ["Tab", `x${tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2)}`],
             ["Focus", `x${focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2)}`],
-            ["Daily Boot", `x${dailyBootMultiplier(upgradeLevel(entry, "dailyBoot")).toFixed(2)}`],
+            ["Cold Storage", `x${coldStorageMultiplier(upgradeLevel(entry, "coldStorage")).toFixed(2)}`],
             ["Vault Pump", `x${vaultPumpMultiplier(upgradeLevel(entry, "storageDuration")).toFixed(2)}`]
           ])}
         </div>
@@ -882,6 +1067,16 @@ function prestigeAwardEstimate() {
   return Math.max(0, prestigeTotalFromLifetime(snapshot.sync.totalLifetimeEarned) - Number(snapshot.sync.ccAlreadyClaimedFromLifetime || 0));
 }
 
+function isFirstPrestigeLocked() {
+  return Number(snapshot?.sync?.prestigeCount || 0) < 1
+    && sciCompare(snapshot?.sync?.totalLifetimeEarned || 0, FIRST_PRESTIGE_LIFETIME_REQUIREMENT) < 0;
+}
+
+function firstPrestigeProgress() {
+  if (!isFirstPrestigeLocked()) return 1;
+  return Math.max(0, Math.min(1, sciToNumber(snapshot.sync.totalLifetimeEarned) / FIRST_PRESTIGE_LIFETIME_REQUIREMENT));
+}
+
 function renderToast() {
   const existing = app.querySelector(".toast");
   if (existing) existing.remove();
@@ -901,13 +1096,26 @@ function showToast(message, type = "success") {
   }, 1800);
 }
 
+function renderLoadError(message) {
+  app.innerHTML = `
+    <main class="view active">
+      <div class="vault-panel">
+        <div class="vault-info">
+          <div>COULD NOT LOAD GAME STATE</div>
+          <small>${escapeHtml(message)}</small>
+        </div>
+      </div>
+    </main>
+  `;
+}
+
 function renderHeader() {
   return `
     <header class="header">
       <div class="balance-container">
         <div class="balance-row">
-          <div class="balance" data-field="balance">${money(liveBalance())}</div>
-          ${collectBurst ? `<div class="collect-burst">+${money(collectBurst)}</div>` : ""}
+          <div class="balance${balanceRoll ? " balance-rolling" : ""}" data-field="balance">${money(displayBalance())}</div>
+          <div class="collect-burst" data-field="collectBurst" ${collectBurst ? "" : "hidden"}>${collectBurst ? `+${money(collectBurst)}` : ""}</div>
         </div>
         <div class="income" data-field="income">+${money(liveIncomePerSecond)}/sec</div>
       </div>
@@ -916,6 +1124,7 @@ function renderHeader() {
         <button class="prestige-currency" data-action="cacheCore" aria-label="Cache Credits and permanent upgrades">
           CC: <strong data-field="cacheCredits">${cc(snapshot.sync.cacheCredits)}</strong>
         </button>
+        <button class="settings-button" data-action="settings" aria-label="Settings">⚙</button>
       </div>
     </header>
   `;
@@ -1067,7 +1276,7 @@ function renderSlot(slot) {
           <span class="slot-fire">⚡</span>
           <span data-field="slot:${domain}:streak">${displayStreak(entry)}</span>
         </div>
-        <div class="slot-vault-ready" data-field="slot:${domain}:ready" ${vaultReady ? "" : "hidden"}>VAULT</div>
+        <div class="slot-vault-ready" data-field="slot:${domain}:ready" ${vaultReady ? "" : "hidden"}>FULL</div>
       </div>
     </button>
   `;
@@ -1138,7 +1347,7 @@ function renderDetail(domain) {
       <div class="vault-panel${isVaultOnboardingStep() ? " tutorial-target tutorial-target-panel" : ""}">
         <div class="vault-info">
           <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
-          <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span></small>
+          <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span> <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(vaultTooltip(entry))}">?</span></small>
         </div>
         <button class="btn btn-collect" data-action="claim" data-domain="${domain}" ${sciCompare(entry.vaultAmount, 0) > 0 ? "" : "disabled"}>COLLECT</button>
       </div>
@@ -1248,6 +1457,7 @@ function effectSummary(id, level, targetLevel = level + 1) {
   const next = targetLevel;
   const entry = currentDetailEntry();
   const slot = entry ? currentSlot(entry.domain) : null;
+  const currentStreak = Number(entry?.currentStreak || 0);
   const map = {
     trafficEngine: `Base income ${money(BASE_RATE * cacheCoreMultiplier(cacheCoreLevel()) * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, level))}/sec -> ${money(BASE_RATE * cacheCoreMultiplier(cacheCoreLevel()) * Math.pow(TRAFFIC_ENGINE_MULTIPLIER, next))}/sec`,
     tabMultiplier: `Live income x${(1 + 0.15 * level).toFixed(2)} -> x${(1 + 0.15 * next).toFixed(2)}`,
@@ -1255,8 +1465,8 @@ function effectSummary(id, level, targetLevel = level + 1) {
     navigationBonus: `Navigation payout ${money(navigationPayoutForLevel(entry, slot, level))} -> ${money(navigationPayoutForLevel(entry, slot, next))}`,
     coldStorage: `Vault cap ${money(vaultCapForLevels(level))} -> ${money(vaultCapForLevels(next))}`,
     storageDuration: `Vault fill rate ${money(vaultRateForLevel(level))}/sec -> ${money(vaultRateForLevel(next))}/sec`,
-    dailyBoot: `Daily bonus x${dailyBootMultiplier(level).toFixed(2)} -> x${dailyBootMultiplier(next).toFixed(2)}`,
-    backgroundHum: `Background income ${(8 * level).toFixed(0)}% -> ${(8 * next).toFixed(0)}% of live base`,
+    dailyBoot: `Daily bonus x${dailyBootMultiplier(level).toFixed(2)} -> x${dailyBootMultiplier(next).toFixed(2)}; streak x${dailyStreakMultiplier(currentStreak, level).toFixed(2)} -> x${dailyStreakMultiplier(currentStreak, next).toFixed(2)}`,
+    backgroundHum: `Background income ${(8 * level).toFixed(0)}% -> ${(8 * next).toFixed(0)}% of background base`,
     idleDepth: `Max idle boost x${(1 + 0.5 * level).toFixed(2)} -> x${(1 + 0.5 * next).toFixed(2)}`,
     wakeBonus: `Wake burst ${money(wakeBurstForLevel(entry, slot, level))} -> ${money(wakeBurstForLevel(entry, slot, next))}`
   };
@@ -1281,7 +1491,7 @@ function upgradeTooltip(id, level) {
       "Cold Storage increases the vault cap, letting this domain store more offline/background money before you collect."
     ],
     storageDuration: [
-      "Vault Pump increases how quickly the vault fills over time. It does not change live income directly."
+      "Vault Pump increases how quickly the vault fills over time."
     ],
     dailyBoot: [
       "Daily Boot increases the first-open daily bonus for this domain. Streak and slot streak bonuses multiply this payout too."
@@ -1322,17 +1532,19 @@ function renderLibrary(pickSlotId = null) {
 
   shell(`
     <main class="view active">
-      <div class="view-header">
-        <button class="btn btn-back" data-action="home">&lt; BACK</button>
-        <span>${pickSlotId ? `ASSIGN SLOT ${pickSlotId}` : "DOMAIN LIBRARY"}</span>
-      </div>
+      ${pickSlotId ? `
+        <div class="view-header">
+          <button class="btn btn-back" data-action="home">&lt; BACK</button>
+          <span>ASSIGN SLOT ${pickSlotId}</span>
+        </div>
+      ` : `<div class="slots-header">DOMAIN LIBRARY</div>`}
       ${showManualAssign ? `
         ${renderOnboardingPrompt("domain")}
         <div class="library-controls${onboardingStep() === "domain" ? " tutorial-target tutorial-target-panel" : ""}">
-          <input class="input-text" data-manual-domain data-slot="${pickSlotId}" value="${manualDefault}" placeholder="Enter domain (e.g. github.com)">
+          <input class="input-text" data-manual-domain data-slot="${pickSlotId}" value="${manualDefault}" placeholder="Enter domain (e.g. youtube.com)">
           <button class="btn" data-action="assignTyped" data-slot="${pickSlotId}">${pickSlot.assignedDomain ? "SWAP IN" : "ADD TO SLOT"}</button>
         </div>
-        <div class="helper-text">${currentSite.valid ? "CURRENT TAB IS PREFILLED. EDIT IT OR SELECT FROM LIBRARY BELOW." : `${currentSite.reason} ENTER A DOMAIN MANUALLY OR SELECT FROM LIBRARY BELOW.`}</div>
+        <div class="helper-text">Enter a domain or select from library below.</div>
       ` : ""}
       <div class="library-controls">
         <input class="input-text" data-search placeholder="Search library">
@@ -1446,7 +1658,17 @@ function renderOnboardingPrompt(step) {
       <div class="onboarding-callout onboarding-callout-upgrade-section">
         <strong>Step 9: Vault upgrades.</strong>
         <span>Vault upgrades increase storage, fill speed, and daily bonuses so returning to this domain pays bigger bursts.</span>
-        <button class="btn btn-prestige" data-action="onboardingNext" data-step="tutorialReward">NEXT</button>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="pinExtension">NEXT</button>
+      </div>
+    `;
+  }
+  if (step === "upgrades" && current === "pinExtension") {
+    return `
+      <div class="onboarding-focus-scrim"></div>
+      <div class="onboarding-callout onboarding-callout-reward onboarding-callout-pin">
+        <strong>Pro tip: keep it handy.</strong>
+        <span>Pin Browser Tycoon from Chrome's puzzle-piece extensions menu if you want quick access to your cash, vaults, and upgrades while you browse.</span>
+        <button class="btn btn-prestige" data-action="onboardingNext" data-step="tutorialReward">GOT IT</button>
       </div>
     `;
   }
@@ -1499,6 +1721,19 @@ function renderLibraryItem(entry, pickSlotId) {
       </button>
     </div>
   `;
+}
+
+async function handleNotificationToggle(event) {
+  const node = event.currentTarget;
+  const key = node.dataset.notificationSetting;
+  const result = await act("updateNotificationSettings", { settings: { [key]: node.checked } }, { silent: true });
+  if (result?.ok) {
+    snapshot.sync.notificationSettings = result.notificationSettings;
+    modal = { name: "settings" };
+    render();
+  } else {
+    node.checked = !node.checked;
+  }
 }
 
 function renderDomainSummary(domain) {
@@ -1612,7 +1847,10 @@ async function handleAction(event) {
     };
   }
   if (action === "buy") await act("buyUpgrade", { domain: node.dataset.domain, upgradeId: node.dataset.upgrade, mode: buyMode });
-  if (action === "claim") await act("claimRevisit", { domain: node.dataset.domain });
+  if (action === "claim") {
+    const result = await act("claimRevisit", { domain: node.dataset.domain });
+    if (result?.ok && Number(result.payout?.total || 0) > 0) showCollectBurst(result.payout.total);
+  }
   if (action === "unlock") await act("unlockSlot");
   if (action === "tier") await act("upgradeSlotTier", { slotId: Number(node.dataset.slot) });
   if (action === "premiumPurchase") await act("openPremiumPayment");
@@ -1685,6 +1923,7 @@ async function handleAction(event) {
   }
   if (action === "prestige") modal = "prestige";
   if (action === "cacheCore") modal = { name: "cacheCore" };
+  if (action === "settings") modal = { name: "settings" };
   if (action === "upgradeCacheCore") await act("upgradeCacheCore");
   if (action === "slotUpgradeList") modal = { name: "slotUpgradeList" };
   if (action === "slotUpgradeDetail") modal = { name: "slotUpgradeDetail", slotId: Number(node.dataset.slot) };
@@ -1732,11 +1971,49 @@ async function collectWelcomeBack() {
 }
 
 function showCollectBurst(amount) {
-  collectBurst = amount;
+  const reward = toSci(amount);
+  if (!displaysAsPositiveMoney(reward)) {
+    collectBurst = null;
+    balanceRoll = null;
+    syncCollectBurstNode();
+    return;
+  }
+  collectBurst = reward;
+  syncCollectBurstNode();
+  const endBalance = liveBalance();
+  const startBalance = sciSub(endBalance, reward);
+  const shouldRollBalance = money(startBalance) !== money(endBalance);
   if (collectBurstTimer) clearTimeout(collectBurstTimer);
+  if (balanceRollFrame) cancelAnimationFrame(balanceRollFrame);
+  balanceRoll = shouldRollBalance
+    ? {
+        from: startBalance,
+        to: endBalance,
+        startedAt: Date.now(),
+        duration: 820
+      }
+    : null;
+  if (!balanceRoll) {
+    app.querySelectorAll("[data-field='balance']").forEach((node) => node.classList.remove("balance-rolling"));
+  }
+  const tickRoll = () => {
+    if (!balanceRoll) return;
+    setText("balance", money(displayBalance()));
+    if (Date.now() - balanceRoll.startedAt < balanceRoll.duration) {
+      balanceRollFrame = requestAnimationFrame(tickRoll);
+      return;
+    }
+    balanceRoll = null;
+    balanceRollFrame = null;
+    setText("balance", money(liveBalance()));
+  };
+  if (balanceRoll) balanceRollFrame = requestAnimationFrame(tickRoll);
+  else balanceRollFrame = null;
   collectBurstTimer = setTimeout(() => {
     collectBurst = null;
+    balanceRoll = null;
     collectBurstTimer = null;
+    syncCollectBurstNode();
     render();
   }, 1300);
 }
@@ -1760,16 +2037,24 @@ async function act(type, payload = {}, options = {}) {
   else if (type === "completeOnboarding" || type === "resetOnboarding" || type === "setOnboardingStep") {}
   else if (options.silent) {}
   else showToast("SUCCESS");
-  snapshot = await send("snapshot");
-  resetLiveTickerBaseline();
+  const nextSnapshot = await send("snapshot");
+  if (isValidSnapshot(nextSnapshot)) {
+    snapshot = nextSnapshot;
+    resetLiveTickerBaseline();
+  } else {
+    showToast(nextSnapshot?.error || "Could not refresh game state.", "warning");
+  }
   if (type === "completeOnboarding" && Number(result.starterCash || 0) > 0) {
     showCollectBurst(result.starterCash);
+  }
+  if (type === "devAddCash" && Number(result.amount || 0) > 0) {
+    showCollectBurst(result.amount);
   }
   return result;
 }
 
 function render() {
-  if (!snapshot) return;
+  if (!isValidSnapshot(snapshot)) return;
   if (onboardingStep() === "intro") return renderOnboarding();
   if (route.name === "detail") return renderDetail(route.domain);
   if (route.name === "store") return renderStore();
