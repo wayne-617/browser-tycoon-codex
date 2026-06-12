@@ -529,7 +529,11 @@ function vaultTooltip(entry) {
 }
 
 function favicon(domain, className = "slot-icon") {
-  return `<img class="${className}" src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64" alt="" onerror="this.src='${iconPath(1)}'">`;
+  const pageUrl = domain.startsWith("http://") || domain.startsWith("https://") ? domain : `https://${domain}/`;
+  const url = new URL(chrome.runtime.getURL("/_favicon/"));
+  url.searchParams.set("pageUrl", pageUrl);
+  url.searchParams.set("size", "64");
+  return `<img class="${className}" src="${url.toString()}" alt="" onerror="this.src='${iconPath(1)}'">`;
 }
 
 function shell(content, activeNav = "slots") {
@@ -645,6 +649,32 @@ function renderNotificationToggle(key, label, detail) {
   `;
 }
 
+function formatCloudSaveTime(value) {
+  if (!value) return "NEVER";
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function renderCloudSaveSection() {
+  const meta = snapshot?.cloudSaveMeta;
+  return `
+    <div class="settings-cloud">
+      <div>
+        <strong>Cloud Save</strong>
+        <small>${meta ? `Last synced ${formatCloudSaveTime(meta.savedAt)} | Lifetime ${money(meta.totalLifetimeEarned)}` : "No synced save yet."}</small>
+      </div>
+      <div class="settings-cloud-actions">
+        <button class="btn" data-action="cloudSyncSave">SYNC SAVE</button>
+        <button class="btn" data-action="cloudLoadSave" ${meta ? "" : "disabled"}>LOAD SAVE</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderSettingsModal() {
   return `
     <div class="modal-scrim" role="presentation">
@@ -657,6 +687,7 @@ function renderSettingsModal() {
           ${renderNotificationToggle("bigPayout", "Big payout", "After 24 hours away, notify if waiting cash is at least 20% of your balance.")}
           ${renderNotificationToggle("streakRisk", "Streak at risk", "At 7 PM, warn if a slotted domain has a 3+ day streak unvisited today.")}
         </div>
+        ${renderCloudSaveSection()}
         <div class="modal-actions single">
           <button class="btn btn-prestige" data-action="cancelModal">DONE</button>
         </div>
@@ -985,6 +1016,7 @@ function renderDomainDetailsModal(domain, source = "slot") {
             ])}
           </div>
           <div class="modal-actions single">
+            ${fromLibrary ? `<button class="btn btn-danger" data-action="deleteDomainPrompt" data-domain="${domain}">DELETE DOMAIN</button>` : ""}
             <button class="btn btn-prestige" data-action="cancelModal">CLOSE</button>
           </div>
         </section>
@@ -1537,7 +1569,7 @@ function renderLibrary(pickSlotId = null) {
           <button class="btn btn-back" data-action="home">&lt; BACK</button>
           <span>ASSIGN SLOT ${pickSlotId}</span>
         </div>
-      ` : `<div class="slots-header">DOMAIN LIBRARY</div>`}
+      ` : `<div class="slots-header library-title-row"><span>DOMAIN LIBRARY</span><small>${Object.keys(snapshot.local.domainLibrary || {}).length}/100</small></div>`}
       ${showManualAssign ? `
         ${renderOnboardingPrompt("domain")}
         <div class="library-controls${onboardingStep() === "domain" ? " tutorial-target tutorial-target-panel" : ""}">
@@ -1836,6 +1868,19 @@ async function handleAction(event) {
       silent: completingOnboarding
     };
   }
+  if (action === "deleteDomainPrompt") {
+    modal = {
+      name: "confirm",
+      variant: "danger",
+      kicker: "DELETE DOMAIN",
+      title: "DELETE DOMAIN?",
+      body: `Delete ${node.dataset.domain} from your library. If it is assigned to a slot, that slot will be emptied too.`,
+      confirmLabel: "DELETE",
+      actionType: "deleteDomain",
+      payload: { domain: node.dataset.domain },
+      after: { route: "library" }
+    };
+  }
   if (action === "swapDomain") {
     const targetSlotId = Number(node.dataset.slot);
     const sourceSlotId = Number(node.dataset.sourceSlot);
@@ -1924,6 +1969,28 @@ async function handleAction(event) {
   if (action === "prestige") modal = "prestige";
   if (action === "cacheCore") modal = { name: "cacheCore" };
   if (action === "settings") modal = { name: "settings" };
+  if (action === "cloudSyncSave") {
+    modal = {
+      name: "confirm",
+      kicker: "CLOUD SAVE",
+      title: "SYNC SAVE?",
+      body: `Upload this device's current save to Chrome sync. This overwrites the existing cloud save with your current progress: ${money(snapshot.sync.totalLifetimeEarned)} lifetime earned.`,
+      confirmLabel: "SYNC SAVE",
+      actionType: "syncCloudSave"
+    };
+  }
+  if (action === "cloudLoadSave") {
+    const meta = snapshot?.cloudSaveMeta;
+    modal = {
+      name: "confirm",
+      variant: "danger",
+      kicker: "LOAD SAVE",
+      title: "REPLACE THIS SAVE?",
+      body: `Load the synced save from ${formatCloudSaveTime(meta?.savedAt)} with ${money(meta?.totalLifetimeEarned || 0)} lifetime earned. This replaces the current save on this device.`,
+      confirmLabel: "LOAD SAVE",
+      actionType: "loadCloudSave"
+    };
+  }
   if (action === "upgradeCacheCore") await act("upgradeCacheCore");
   if (action === "slotUpgradeList") modal = { name: "slotUpgradeList" };
   if (action === "slotUpgradeDetail") modal = { name: "slotUpgradeDetail", slotId: Number(node.dataset.slot) };
@@ -1944,6 +2011,7 @@ async function handleAction(event) {
     const result = await act(pending.actionType, pending.payload || {}, { silent: Boolean(pending.silent) });
     if (result?.ok && pending.after?.onboardingStep) await act("setOnboardingStep", { step: pending.after.onboardingStep });
     if (result?.ok && pending.after?.routeAssignedSlot) routeToAssignedDomain(pending.after.routeAssignedSlot);
+    if (result?.ok && pending.after?.route) route = { name: pending.after.route };
   }
   if (action === "confirmSwapDomain" && modal?.name === "swapDomain") {
     const pending = modal;
