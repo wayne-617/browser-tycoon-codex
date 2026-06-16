@@ -24,6 +24,7 @@ let collectBurstTimer = null;
 let balanceRoll = null;
 let balanceRollFrame = null;
 
+const FEEDBACK_FORM_URL = "https://forms.gle/GP8nFvBRYaw4nWds5";
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
 const BUY_MODES = ["1", "10"];
 const {
@@ -636,13 +637,12 @@ function notificationSettings() {
   return settings;
 }
 
-function renderNotificationToggle(key, label, detail) {
+function renderNotificationToggle(key, label) {
   const settings = notificationSettings();
   return `
-    <label class="settings-toggle">
+    <label class="settings-toggle${key === "enabled" ? " settings-toggle-parent" : " settings-toggle-child"}">
       <span>
         <strong>${label}</strong>
-        <small>${detail}</small>
       </span>
       <input type="checkbox" data-notification-setting="${key}" ${settings[key] ? "checked" : ""}>
     </label>
@@ -665,7 +665,7 @@ function renderCloudSaveSection() {
     <div class="settings-cloud">
       <div>
         <strong>Cloud Save</strong>
-        <small>${meta ? `Last synced ${formatCloudSaveTime(meta.savedAt)} | Lifetime ${money(meta.totalLifetimeEarned)}` : "No synced save yet."}</small>
+        <small>${meta ? `${formatCloudSaveTime(meta.savedAt)} | ${money(meta.totalLifetimeEarned)} lifetime` : "No synced save."}</small>
       </div>
       <div class="settings-cloud-actions">
         <button class="btn" data-action="cloudSyncSave">SYNC SAVE</button>
@@ -675,19 +675,27 @@ function renderCloudSaveSection() {
   `;
 }
 
+function renderFeedbackSection() {
+  return `
+    <button class="btn settings-feedback" data-action="openFeedback">LEAVE FEEDBACK</button>
+  `;
+}
+
 function renderSettingsModal() {
   return `
     <div class="modal-scrim" role="presentation">
       <section class="modal-panel settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-        <div class="modal-kicker">SETTINGS</div>
-        <h2 id="settingsTitle">GAME ALERTS</h2>
+        <h2 id="settingsTitle">SETTINGS</h2>
         <div class="settings-list">
-          ${renderNotificationToggle("enabled", "Allow notifications", "Turn this off to disable every notification type, or turn it on to enable all three.")}
-          ${renderNotificationToggle("vaultFull", "All vaults full", "Send once when every assigned vault is full, then wait until you collect.")}
-          ${renderNotificationToggle("bigPayout", "Big payout", "After 24 hours away, notify if waiting cash is at least 20% of your balance.")}
-          ${renderNotificationToggle("streakRisk", "Streak at risk", "At 7 PM, warn if a slotted domain has a 3+ day streak unvisited today.")}
+          ${renderNotificationToggle("enabled", "Allow notifications")}
+          <div class="settings-sublist" aria-label="Notification types">
+            ${renderNotificationToggle("vaultFull", "All vaults full")}
+            ${renderNotificationToggle("bigPayout", "Big payout")}
+            ${renderNotificationToggle("streakRisk", "Streak at risk")}
+          </div>
         </div>
         ${renderCloudSaveSection()}
+        ${renderFeedbackSection()}
         <div class="modal-actions single">
           <button class="btn btn-prestige" data-action="cancelModal">DONE</button>
         </div>
@@ -1074,6 +1082,7 @@ function renderDomainDetailsModal(domain, source = "slot") {
           ])}
         </div>
         <div class="modal-actions single">
+          ${fromLibrary ? `<button class="btn btn-danger" data-action="deleteDomainPrompt" data-domain="${domain}">DELETE DOMAIN</button>` : ""}
           <button class="btn btn-prestige" data-action="cancelModal">CLOSE</button>
         </div>
       </section>
@@ -1188,8 +1197,54 @@ function renderStore() {
         <button class="btn btn-danger" data-action="devReset">DEV RESET $/CC</button>
         <button class="btn btn-danger" data-action="devResetLifetime">DEV RESET LIFETIME</button>
       </div>
+      ${renderDevSlotBorderSamples()}
     </main>
   `, "store");
+}
+
+function renderDevSlotBorderSamples() {
+  return `
+    <div class="dev-border-samples" aria-label="Slot border rank samples">
+      <div class="dev-border-label">NEW RANK BORDERS</div>
+      ${[1, 2, 3, 4, 5].map((tier) => `
+        <div class="slot rank-sample ${tierClass(tier)}">
+          <div class="slot-info">
+            <img class="slot-icon" src="${iconPath(12 + tier)}" alt="">
+            <div>
+              <div class="slot-domain">${tierMaterial(tier)}</div>
+              <div class="slot-tier">Rank ${tierName(tier)} border sample</div>
+            </div>
+          </div>
+          <div class="slot-badges">
+            <div class="slot-streak active">
+              <span class="slot-fire">⚡</span>
+              <span>${tier}</span>
+            </div>
+            <div class="slot-vault-ready">FULL</div>
+          </div>
+        </div>
+      `).join("")}
+      <div class="dev-border-label">ORIGINAL BORDERS</div>
+      ${[1, 2, 3, 4, 5].map((tier) => `
+        <div class="slot rank-sample original-rank-sample original-${tierClass(tier)}">
+          <div class="slot-info">
+            <img class="slot-icon" src="${iconPath(12 + tier)}" alt="">
+            <div>
+              <div class="slot-domain">${tierMaterial(tier)}</div>
+              <div class="slot-tier">Original rank ${tierName(tier)}</div>
+            </div>
+          </div>
+          <div class="slot-badges">
+            <div class="slot-streak active">
+              <span class="slot-fire">⚡</span>
+              <span>${tier}</span>
+            </div>
+            <div class="slot-vault-ready">FULL</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderSupporterCoreStoreItem() {
@@ -1817,6 +1872,7 @@ async function handleAction(event) {
   }
   if (action === "mode" && BUY_MODES.includes(node.dataset.mode)) buyMode = node.dataset.mode;
   if (action === "openDomain") await chrome.tabs.create({ url: `https://${node.dataset.domain}` });
+  if (action === "openFeedback") await chrome.tabs.create({ url: FEEDBACK_FORM_URL });
   if (action === "finishOnboarding") {
     const result = await act("setOnboardingStep", { step: "slot" });
     if (result?.ok) {
@@ -1874,7 +1930,7 @@ async function handleAction(event) {
       variant: "danger",
       kicker: "DELETE DOMAIN",
       title: "DELETE DOMAIN?",
-      body: `Delete ${node.dataset.domain} from your library. If it is assigned to a slot, that slot will be emptied too.`,
+      body: `Delete ${node.dataset.domain} from your library? This permanently removes its upgrades, vault, streak, lifetime history, and other domain data. If it is assigned to a slot, that slot will be emptied too.`,
       confirmLabel: "DELETE",
       actionType: "deleteDomain",
       payload: { domain: node.dataset.domain },
@@ -1974,7 +2030,7 @@ async function handleAction(event) {
       name: "confirm",
       kicker: "CLOUD SAVE",
       title: "SYNC SAVE?",
-      body: `Upload this device's current save to Chrome sync. This overwrites the existing cloud save with your current progress: ${money(snapshot.sync.totalLifetimeEarned)} lifetime earned.`,
+      body: `Upload this device's save to Chrome sync. Current progress: ${money(snapshot.sync.totalLifetimeEarned)} lifetime.`,
       confirmLabel: "SYNC SAVE",
       actionType: "syncCloudSave"
     };
@@ -1986,7 +2042,7 @@ async function handleAction(event) {
       variant: "danger",
       kicker: "LOAD SAVE",
       title: "REPLACE THIS SAVE?",
-      body: `Load the synced save from ${formatCloudSaveTime(meta?.savedAt)} with ${money(meta?.totalLifetimeEarned || 0)} lifetime earned. This replaces the current save on this device.`,
+      body: `Load the synced save from ${formatCloudSaveTime(meta?.savedAt)}. This replaces this device's save.`,
       confirmLabel: "LOAD SAVE",
       actionType: "loadCloudSave"
     };

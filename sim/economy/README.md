@@ -37,7 +37,7 @@ node sim/economy/run.mjs --days 180
 node sim/economy/run.mjs --focus-minutes 60 --background-minutes 30
 node sim/economy/run.mjs --starting-cash 1000
 node sim/economy/run.mjs --traffic-multiplier 1.2 --prestige-divisor 250000
-node sim/economy/run.mjs --cache-core-multiplier 1.5 --cache-core-base-cost 5 --cache-core-cost-growth 2
+node sim/economy/run.mjs --cache-core-multiplier 1.45 --cache-core-base-cost 5 --cache-core-cost-growth 1.85
 node sim/economy/run.mjs --vault-claims-per-day 2 --vault-linear-multiplier 0.12 --vault-poly-multiplier 0.005 --vault-poly-exponent 3
 node sim/economy/run.mjs --vault-traffic-exponent 0.9 --background-traffic-exponent 0.9
 node sim/economy/run.mjs --daily-base-minutes 60 --daily-streak-base-multiplier 0.04 --daily-streak-boot-multiplier 0.2 --navigation-event-seconds 18 --wake-burst-seconds 105
@@ -46,8 +46,8 @@ node sim/economy/run.mjs --days 100 --prestige-mode --prestige-resets 2 --presti
 
 ## Defaults
 
-- `days`: `21`
-- `focus-minutes`: `120` total focused minutes per day, split evenly across unlocked domains
+- `days`: `33`
+- `focus-minutes`: `150` total focused minutes per day, split evenly across unlocked domains
 - `background-minutes`: `60` minutes per other slot per day
 - `vault-claims-per-day`: `2`
 - `starting-cash`: `$1000`, counted as initial lifetime earnings and spendable before day 1
@@ -59,7 +59,7 @@ node sim/economy/run.mjs --days 100 --prestige-mode --prestige-resets 2 --presti
 - Navigation payouts use active income per second times `18` seconds times `sqrt(Navigation Bonus level)` per event
 - Wake payouts use base domain rate times `105` seconds times `Wake Bonus level^1.1`
 - `starting-slots`: `3`
-- prestige reset mode enabled with `2` resets after days `6` and `14`
+- prestige reset mode enabled with `8` resets after days `4`, `8`, `12`, `16`, `21`, `25`, `29`, and `33`
 - navigation events enabled at `5` per focused hour
 - wake events enabled at `3` per domain per day
 

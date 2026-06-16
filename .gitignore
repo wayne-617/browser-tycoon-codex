@@ -1,2 +1,3 @@
-sim/economy/output/*.json
-sim/economy/output-*/*.json
+sim/economy/output/
+sim/economy/output-*/
+v1-popup-screenshot.png

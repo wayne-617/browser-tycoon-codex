@@ -383,11 +383,32 @@ body {
   margin-top: 0;
 }
 
+.dev-border-samples {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px dashed rgba(0, 240, 255, 0.25);
+  background: rgba(4, 13, 20, 0.38);
+}
+
+.dev-border-label {
+  color: var(--primary);
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+  text-shadow: 0 0 5px rgba(0, 240, 255, 0.28);
+}
+
 .slot {
   --slot-frame: var(--border);
   --slot-glow: rgba(0, 240, 255, 0.12);
   --slot-wash: rgba(0, 240, 255, 0.03);
   --slot-sheen: rgba(255, 255, 255, 0.08);
+  --rank-border: linear-gradient(var(--slot-frame), var(--slot-frame));
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: transparent;
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -424,6 +445,26 @@ body {
   opacity: 0.75;
 }
 
+.slot:not(.slot-empty)::after,
+.slot-upgrade-option::after,
+.slot-upgrade-preview::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--slot-frame), var(--slot-frame)) left top / var(--rank-corner-size) var(--rank-corner-thickness) no-repeat,
+    linear-gradient(var(--slot-frame), var(--slot-frame)) left top / var(--rank-corner-thickness) var(--rank-corner-size) no-repeat,
+    linear-gradient(var(--slot-frame), var(--slot-frame)) right top / var(--rank-corner-size) var(--rank-corner-thickness) no-repeat,
+    linear-gradient(var(--slot-frame), var(--slot-frame)) right top / var(--rank-corner-thickness) var(--rank-corner-size) no-repeat,
+    linear-gradient(var(--slot-frame), var(--slot-frame)) left bottom / var(--rank-corner-size) var(--rank-corner-thickness) no-repeat,
+    linear-gradient(var(--slot-frame), var(--slot-frame)) left bottom / var(--rank-corner-thickness) var(--rank-corner-size) no-repeat,
+    linear-gradient(var(--slot-frame), var(--slot-frame)) right bottom / var(--rank-corner-size) var(--rank-corner-thickness) no-repeat,
+    linear-gradient(var(--slot-frame), var(--slot-frame)) right bottom / var(--rank-corner-thickness) var(--rank-corner-size) no-repeat;
+  filter: drop-shadow(0 0 5px var(--rank-corner-glow));
+}
+
 .slot:hover {
   border-color: color-mix(in srgb, var(--slot-frame), var(--primary) 35%);
   box-shadow: 0 0 8px var(--slot-glow);
@@ -447,42 +488,148 @@ body {
 
 .slot-tier-1 {
   --slot-frame: #b86a36;
-  --slot-glow: rgba(216, 124, 61, 0.28);
-  --slot-wash: rgba(184, 106, 54, 0.13);
-  --slot-sheen: rgba(255, 177, 116, 0.16);
-  border-width: 2px;
+  --slot-glow: rgba(216, 124, 61, 0.34);
+  --slot-wash: rgba(184, 106, 54, 0.15);
+  --slot-sheen: rgba(255, 177, 116, 0.18);
+  --rank-border: linear-gradient(135deg, #5b2e1e, #e19056 28%, #7b3f28 62%, #ffc08b);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(216, 124, 61, 0.44);
+  border: 2px solid transparent;
+  background:
+    linear-gradient(115deg, var(--slot-wash), rgba(10, 25, 47, 0) 52%) padding-box,
+    linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
+    var(--rank-border) border-box;
+  box-shadow: inset 0 0 12px rgba(184, 106, 54, 0.08), 0 0 7px rgba(216, 124, 61, 0.16);
 }
 
 .slot-tier-2 {
-  --slot-frame: #c9d8e8;
-  --slot-glow: rgba(196, 222, 244, 0.32);
-  --slot-wash: rgba(174, 202, 226, 0.14);
-  --slot-sheen: rgba(255, 255, 255, 0.22);
-  border-width: 2px;
-  box-shadow: 0 0 7px rgba(196, 222, 244, 0.16);
+  --slot-frame: #d8e9f7;
+  --slot-glow: rgba(196, 222, 244, 0.38);
+  --slot-wash: rgba(174, 202, 226, 0.15);
+  --slot-sheen: rgba(255, 255, 255, 0.24);
+  --rank-border: linear-gradient(135deg, #6f8191, #f4fbff 24%, #a7bbc9 52%, #ffffff 76%, #7d91a1);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(216, 239, 255, 0.44);
+  border: 2px solid transparent;
+  background:
+    linear-gradient(115deg, var(--slot-wash), rgba(10, 25, 47, 0) 52%) padding-box,
+    linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
+    var(--rank-border) border-box;
+  box-shadow: inset 0 0 13px rgba(196, 222, 244, 0.09), 0 0 9px rgba(196, 222, 244, 0.18);
 }
 
 .slot-tier-3 {
   --slot-frame: #ffd166;
-  --slot-glow: rgba(255, 209, 102, 0.38);
-  --slot-wash: rgba(255, 209, 102, 0.17);
-  --slot-sheen: rgba(255, 240, 174, 0.26);
-  border-width: 2px;
-  box-shadow: 0 0 10px rgba(255, 209, 102, 0.18);
+  --slot-glow: rgba(255, 209, 102, 0.46);
+  --slot-wash: rgba(255, 209, 102, 0.18);
+  --slot-sheen: rgba(255, 240, 174, 0.3);
+  --rank-border: linear-gradient(135deg, #8a5b13, #ffd166 19%, #fff0ae 35%, #c48320 58%, #fff2b8 82%, #9a6817);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(255, 209, 102, 0.58);
+  border: 2px solid transparent;
+  background:
+    linear-gradient(115deg, var(--slot-wash), rgba(10, 25, 47, 0) 52%) padding-box,
+    linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
+    var(--rank-border) border-box;
+  box-shadow: inset 0 0 16px rgba(255, 209, 102, 0.1), 0 0 12px rgba(255, 209, 102, 0.24);
 }
 
 .slot-tier-4 {
   --slot-frame: #8ff7ff;
+  --slot-glow: rgba(0, 240, 255, 0.44);
+  --slot-wash: rgba(0, 240, 255, 0.17);
+  --slot-sheen: rgba(233, 254, 255, 0.34);
+  --rank-border: linear-gradient(135deg, #087d91, #8ff7ff 22%, #e9feff 42%, #39ddea 68%, #0a9fb5);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(0, 240, 255, 0.68);
+  border: 2px solid transparent;
+  background:
+    linear-gradient(115deg, rgba(0, 240, 255, 0.13), rgba(143, 247, 255, 0.045) 52%, rgba(233, 254, 255, 0.035)) padding-box,
+    linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
+    var(--rank-border) border-box;
+  box-shadow:
+    inset 0 0 16px rgba(0, 240, 255, 0.11),
+    0 0 13px rgba(0, 240, 255, 0.28),
+    0 0 18px rgba(143, 247, 255, 0.13);
+}
+
+.slot-tier-5 {
+  --slot-frame: #ffffff;
+  --slot-glow: rgba(0, 240, 255, 0.34);
+  --slot-wash: rgba(185, 0, 255, 0.06);
+  --slot-sheen: rgba(255, 255, 255, 0.2);
+  --rank-border: conic-gradient(from 130deg, #00f0ff, #b900ff, #ffd166, #00ff66, #00f0ff);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(255, 255, 255, 0.72);
+  border: 2px solid transparent;
+  background:
+    linear-gradient(115deg, rgba(185, 0, 255, 0.06), rgba(0, 240, 255, 0.045) 48%, rgba(255, 209, 102, 0.04)) padding-box,
+    linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
+    var(--rank-border) border-box;
+  box-shadow:
+    inset 0 0 16px rgba(255, 255, 255, 0.06),
+    0 0 10px rgba(0, 240, 255, 0.2),
+    0 0 16px rgba(185, 0, 255, 0.16);
+}
+
+.rank-sample {
+  cursor: default;
+}
+
+.rank-sample:hover {
+  transform: none;
+}
+
+.original-rank-sample {
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: transparent;
+  border: 2px solid var(--slot-frame);
+  background:
+    linear-gradient(115deg, var(--slot-wash), rgba(10, 25, 47, 0) 52%),
+    var(--bg-panel);
+}
+
+.original-slot-tier-1 {
+  --slot-frame: #b86a36;
+  --slot-glow: rgba(216, 124, 61, 0.28);
+  --slot-wash: rgba(184, 106, 54, 0.13);
+  --slot-sheen: rgba(255, 177, 116, 0.16);
+  box-shadow: none;
+}
+
+.original-slot-tier-2 {
+  --slot-frame: #c9d8e8;
+  --slot-glow: rgba(196, 222, 244, 0.32);
+  --slot-wash: rgba(174, 202, 226, 0.14);
+  --slot-sheen: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 0 7px rgba(196, 222, 244, 0.16);
+}
+
+.original-slot-tier-3 {
+  --slot-frame: #ffd166;
+  --slot-glow: rgba(255, 209, 102, 0.38);
+  --slot-wash: rgba(255, 209, 102, 0.17);
+  --slot-sheen: rgba(255, 240, 174, 0.26);
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.18);
+}
+
+.original-slot-tier-4 {
+  --slot-frame: #8ff7ff;
   --slot-glow: rgba(0, 240, 255, 0.34);
   --slot-wash: rgba(0, 240, 255, 0.14);
   --slot-sheen: rgba(233, 254, 255, 0.28);
-  border-width: 2px;
   box-shadow:
     0 0 10px rgba(0, 240, 255, 0.2),
     0 0 16px rgba(185, 0, 255, 0.12);
 }
 
-.slot-tier-5 {
+.original-slot-tier-5 {
   --slot-frame: #ffffff;
   --slot-glow: rgba(0, 240, 255, 0.28);
   --slot-wash: rgba(185, 0, 255, 0.05);
@@ -1252,8 +1399,16 @@ body {
 
 .settings-list {
   display: grid;
-  gap: 9px;
+  gap: 7px;
   margin: 12px 0;
+}
+
+.settings-sublist {
+  display: grid;
+  gap: 6px;
+  margin-left: 18px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(0, 240, 255, 0.2);
 }
 
 .settings-toggle {
@@ -1266,6 +1421,12 @@ body {
   padding: 10px;
 }
 
+.settings-toggle-child {
+  border-color: rgba(0, 240, 255, 0.18);
+  background: rgba(4, 13, 20, 0.28);
+  padding: 8px 10px;
+}
+
 .settings-toggle span {
   display: grid;
   gap: 3px;
@@ -1275,6 +1436,11 @@ body {
   color: var(--primary);
   font-size: 20px;
   font-weight: normal;
+}
+
+.settings-toggle-child strong {
+  color: var(--text);
+  font-size: 17px;
 }
 
 .settings-toggle small {
@@ -1319,6 +1485,21 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.settings-feedback {
+  width: 100%;
+  border-color: var(--warning);
+  background: rgba(255, 209, 102, 0.04);
+  color: var(--warning);
+  padding: 10px;
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+
+.settings-feedback:hover {
+  background: rgba(255, 209, 102, 0.1);
+  box-shadow: 0 0 8px rgba(255, 209, 102, 0.4);
 }
 
 .modal-reward {
@@ -1494,6 +1675,10 @@ body {
   width: 100%;
 }
 
+.modal-actions .btn-danger {
+  margin-top: 0;
+}
+
 .modal-actions.single {
   grid-template-columns: 1fr;
 }
@@ -1583,12 +1768,18 @@ body {
   --slot-frame: var(--border);
   --slot-glow: rgba(0, 240, 255, 0.14);
   --slot-wash: rgba(0, 240, 255, 0.03);
+  --slot-sheen: rgba(255, 255, 255, 0.08);
+  --rank-border: linear-gradient(var(--slot-frame), var(--slot-frame));
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: transparent;
   position: relative;
   min-height: 68px;
-  border: 2px solid var(--slot-frame);
+  border: 2px solid transparent;
   background:
-    linear-gradient(115deg, var(--slot-wash), rgba(10, 25, 47, 0) 52%),
-    var(--bg-panel);
+    linear-gradient(115deg, var(--slot-wash), rgba(10, 25, 47, 0) 52%) padding-box,
+    linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
+    var(--rank-border) border-box;
   color: var(--text);
   font-family: inherit;
   overflow: hidden;
@@ -1614,54 +1805,77 @@ body {
 .slot-upgrade-option.slot-tier-1,
 .slot-upgrade-preview.slot-tier-1 {
   --slot-frame: #b86a36;
-  --slot-glow: rgba(216, 124, 61, 0.28);
-  --slot-wash: rgba(184, 106, 54, 0.13);
-  --slot-sheen: rgba(255, 177, 116, 0.16);
+  --slot-glow: rgba(216, 124, 61, 0.34);
+  --slot-wash: rgba(184, 106, 54, 0.15);
+  --slot-sheen: rgba(255, 177, 116, 0.18);
+  --rank-border: linear-gradient(135deg, #5b2e1e, #e19056 28%, #7b3f28 62%, #ffc08b);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(216, 124, 61, 0.44);
+  box-shadow: inset 0 0 12px rgba(184, 106, 54, 0.08), 0 0 7px rgba(216, 124, 61, 0.16);
 }
 
 .slot-upgrade-option.slot-tier-2,
 .slot-upgrade-preview.slot-tier-2 {
-  --slot-frame: #c9d8e8;
-  --slot-glow: rgba(196, 222, 244, 0.32);
-  --slot-wash: rgba(174, 202, 226, 0.14);
-  --slot-sheen: rgba(255, 255, 255, 0.22);
-  box-shadow: 0 0 7px rgba(196, 222, 244, 0.16);
+  --slot-frame: #d8e9f7;
+  --slot-glow: rgba(196, 222, 244, 0.38);
+  --slot-wash: rgba(174, 202, 226, 0.15);
+  --slot-sheen: rgba(255, 255, 255, 0.24);
+  --rank-border: linear-gradient(135deg, #6f8191, #f4fbff 24%, #a7bbc9 52%, #ffffff 76%, #7d91a1);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(216, 239, 255, 0.44);
+  box-shadow: inset 0 0 13px rgba(196, 222, 244, 0.09), 0 0 9px rgba(196, 222, 244, 0.18);
 }
 
 .slot-upgrade-option.slot-tier-3,
 .slot-upgrade-preview.slot-tier-3 {
   --slot-frame: #ffd166;
-  --slot-glow: rgba(255, 209, 102, 0.38);
-  --slot-wash: rgba(255, 209, 102, 0.17);
-  --slot-sheen: rgba(255, 240, 174, 0.26);
-  box-shadow: 0 0 10px rgba(255, 209, 102, 0.18);
+  --slot-glow: rgba(255, 209, 102, 0.46);
+  --slot-wash: rgba(255, 209, 102, 0.18);
+  --slot-sheen: rgba(255, 240, 174, 0.3);
+  --rank-border: linear-gradient(135deg, #8a5b13, #ffd166 19%, #fff0ae 35%, #c48320 58%, #fff2b8 82%, #9a6817);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(255, 209, 102, 0.58);
+  box-shadow: inset 0 0 16px rgba(255, 209, 102, 0.1), 0 0 12px rgba(255, 209, 102, 0.24);
 }
 
 .slot-upgrade-option.slot-tier-4,
 .slot-upgrade-preview.slot-tier-4 {
   --slot-frame: #8ff7ff;
-  --slot-glow: rgba(0, 240, 255, 0.34);
-  --slot-wash: rgba(0, 240, 255, 0.14);
-  --slot-sheen: rgba(233, 254, 255, 0.28);
+  --slot-glow: rgba(0, 240, 255, 0.44);
+  --slot-wash: rgba(0, 240, 255, 0.17);
+  --slot-sheen: rgba(233, 254, 255, 0.34);
+  --rank-border: linear-gradient(135deg, #087d91, #8ff7ff 22%, #e9feff 42%, #39ddea 68%, #0a9fb5);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(0, 240, 255, 0.68);
   box-shadow:
-    0 0 10px rgba(0, 240, 255, 0.2),
-    0 0 16px rgba(185, 0, 255, 0.12);
+    inset 0 0 16px rgba(0, 240, 255, 0.11),
+    0 0 13px rgba(0, 240, 255, 0.28),
+    0 0 18px rgba(143, 247, 255, 0.13);
 }
 
 .slot-upgrade-option.slot-tier-5,
 .slot-upgrade-preview.slot-tier-5 {
   --slot-frame: #ffffff;
-  --slot-glow: rgba(0, 240, 255, 0.28);
-  --slot-wash: rgba(185, 0, 255, 0.05);
-  --slot-sheen: rgba(255, 255, 255, 0.18);
+  --slot-glow: rgba(0, 240, 255, 0.34);
+  --slot-wash: rgba(185, 0, 255, 0.06);
+  --slot-sheen: rgba(255, 255, 255, 0.2);
+  --rank-border: conic-gradient(from 130deg, #00f0ff, #b900ff, #ffd166, #00ff66, #00f0ff);
+  --rank-corner-size: 0;
+  --rank-corner-thickness: 0;
+  --rank-corner-glow: rgba(255, 255, 255, 0.72);
   border: 2px solid transparent;
   background:
-    linear-gradient(115deg, rgba(185, 0, 255, 0.05), rgba(0, 240, 255, 0.04) 48%, rgba(255, 209, 102, 0.035)) padding-box,
+    linear-gradient(115deg, rgba(185, 0, 255, 0.06), rgba(0, 240, 255, 0.045) 48%, rgba(255, 209, 102, 0.04)) padding-box,
     linear-gradient(var(--bg-panel), var(--bg-panel)) padding-box,
-    conic-gradient(from 130deg, #00f0ff, #b900ff, #ffd166, #00ff66, #00f0ff) border-box;
+    var(--rank-border) border-box;
   box-shadow:
-    0 0 10px rgba(0, 240, 255, 0.18),
-    0 0 16px rgba(185, 0, 255, 0.14);
+    inset 0 0 16px rgba(255, 255, 255, 0.06),
+    0 0 10px rgba(0, 240, 255, 0.2),
+    0 0 16px rgba(185, 0, 255, 0.16);
 }
 
 .slot-upgrade-preview {
@@ -1878,4 +2092,3 @@ VT323\, \Consolas\, monospace;
 }
 
 .upgrade-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 10px; border-bottom: 2px solid var(--border); } .upgrade-tabs { display: flex; border-bottom: none; margin-bottom: 0; }
-

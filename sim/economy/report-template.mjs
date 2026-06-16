@@ -183,13 +183,13 @@ export function renderReport(result) {
             <input name="slotPrestigeCostScale" type="number" min="1" step="0.01" value="${economy.slotPrestigeCostScale || 1}">
           </label>
           <label>Cache Core multiplier
-            <input name="cacheCoreMultiplierBase" type="number" min="1" step="0.01" value="${economy.cacheCoreMultiplierBase || 1.5}">
+            <input name="cacheCoreMultiplierBase" type="number" min="1" step="0.01" value="${economy.cacheCoreMultiplierBase || 1.45}">
           </label>
           <label>Cache Core base cost
             <input name="cacheCoreBaseCost" type="number" min="1" step="1" value="${economy.cacheCoreBaseCost || 5}">
           </label>
           <label>Cache Core cost growth
-            <input name="cacheCoreCostGrowth" type="number" min="1" step="0.01" value="${economy.cacheCoreCostGrowth || 1.5}">
+            <input name="cacheCoreCostGrowth" type="number" min="1" step="0.01" value="${economy.cacheCoreCostGrowth || 1.85}">
           </label>
           <label>Slot tier bonus tier
             <input name="slotTier" type="number" min="0" step="1" value="${initialConfig.slotTier}">
@@ -307,11 +307,11 @@ function slotTierCost(economy, slotId, tier) {
 }
 
 function cacheCoreMultiplier(economy, level) {
-  return Math.pow(economy.cacheCoreMultiplierBase || 1.5, Number(level || 0));
+  return Math.pow(economy.cacheCoreMultiplierBase || 1.45, Number(level || 0));
 }
 
 function cacheCoreCost(economy, level) {
-  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 1.5, Number(level || 0)));
+  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 1.85, Number(level || 0)));
 }
 
 function domainBaseRate(domain, economy, cacheCoreLevel = 0) {
@@ -876,9 +876,9 @@ function readEconomy(form) {
   economy.trafficEngineMultiplier = Math.max(1, readNumber(form, "trafficEngineMultiplier", economy.trafficEngineMultiplier));
   economy.prestigeDivisor = Math.max(1, readNumber(form, "prestigeDivisor", economy.prestigeDivisor));
   economy.slotPrestigeCostScale = Math.max(1, readNumber(form, "slotPrestigeCostScale", economy.slotPrestigeCostScale || 1));
-  economy.cacheCoreMultiplierBase = Math.max(1, readNumber(form, "cacheCoreMultiplierBase", economy.cacheCoreMultiplierBase || 1.5));
+  economy.cacheCoreMultiplierBase = Math.max(1, readNumber(form, "cacheCoreMultiplierBase", economy.cacheCoreMultiplierBase || 1.45));
   economy.cacheCoreBaseCost = Math.max(1, readNumber(form, "cacheCoreBaseCost", economy.cacheCoreBaseCost || 5));
-  economy.cacheCoreCostGrowth = Math.max(1, readNumber(form, "cacheCoreCostGrowth", economy.cacheCoreCostGrowth || 1.5));
+  economy.cacheCoreCostGrowth = Math.max(1, readNumber(form, "cacheCoreCostGrowth", economy.cacheCoreCostGrowth || 1.85));
   document.querySelectorAll("[data-upgrade-index]").forEach((input) => {
     const def = economy.upgradeDefs[Number(input.dataset.upgradeIndex)];
     const field = input.dataset.upgradeField;

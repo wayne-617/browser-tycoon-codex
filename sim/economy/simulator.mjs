@@ -1,6 +1,6 @@
 export const DEFAULT_SIM_OPTIONS = {
-  days: 21,
-  focusMinutesPerDay: 120,
+  days: 33,
+  focusMinutesPerDay: 150,
   backgroundMinutesPerOtherSlotPerDay: 60,
   vaultClaimsPerDay: 2,
   startingCash: 1000,
@@ -13,8 +13,8 @@ export const DEFAULT_SIM_OPTIONS = {
   maxUpgradePurchasesPerPeriod: 2000,
   slotTier: 0,
   prestigeMode: true,
-  prestigeResets: 2,
-  prestigeResetDays: [6, 14]
+  prestigeResets: 8,
+  prestigeResetDays: [4, 8, 12, 16, 21, 25, 29, 33]
 };
 
 function floorToSignificantFigures(value, figures = 2) {
@@ -77,11 +77,11 @@ function slotTierCost(economy, slotId, tier) {
 }
 
 function cacheCoreMultiplier(economy, level) {
-  return Math.pow(economy.cacheCoreMultiplierBase || 1.5, Number(level || 0));
+  return Math.pow(economy.cacheCoreMultiplierBase || 1.45, Number(level || 0));
 }
 
 function cacheCoreCost(economy, level) {
-  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 2, Number(level || 0)));
+  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 1.85, Number(level || 0)));
 }
 
 function domainBaseRate(domain, economy, cacheCoreLevel = 0) {
