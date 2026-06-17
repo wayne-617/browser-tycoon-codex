@@ -1,0 +1,99 @@
+{
+  "name": "Prestige Showcase",
+  "money": 4280000000000000,
+  "incomePerSecond": 6200000000,
+  "cacheCredits": 245000,
+  "slotsUnlocked": 9,
+  "slots": [
+    {
+      "domain": "youtube.com",
+      "tier": 5,
+      "state": "active",
+      "incomePerSecond": 2600000000,
+      "vaultAmount": 420000000000,
+      "vaultFull": true,
+      "streak": 28,
+      "checkedToday": true
+    },
+    {
+      "domain": "claude.ai",
+      "tier": 5,
+      "state": "background",
+      "incomePerSecond": 1480000000,
+      "vaultAmount": 280000000000,
+      "vaultFull": true,
+      "streak": 21,
+      "checkedToday": true
+    },
+    {
+      "domain": "openai.com",
+      "tier": 4,
+      "state": "background",
+      "incomePerSecond": 920000000,
+      "vaultAmount": 164000000000,
+      "vaultFull": false,
+      "streak": 18,
+      "checkedToday": false
+    },
+    {
+      "domain": "docs.google.com",
+      "tier": 3,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 97000000000,
+      "vaultFull": false,
+      "streak": 16,
+      "checkedToday": true
+    },
+    {
+      "domain": "notion.so",
+      "tier": 3,
+      "state": "background",
+      "incomePerSecond": 610000000,
+      "vaultAmount": 118000000000,
+      "vaultFull": true,
+      "streak": 13,
+      "checkedToday": false
+    },
+    {
+      "domain": "figma.com",
+      "tier": 2,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 54000000000,
+      "vaultFull": false,
+      "streak": 11,
+      "checkedToday": true
+    },
+    {
+      "domain": "spotify.com",
+      "tier": 1,
+      "state": "background",
+      "incomePerSecond": 420000000,
+      "vaultAmount": 76000000000,
+      "vaultFull": false,
+      "streak": 8,
+      "checkedToday": false
+    },
+    {
+      "domain": "twitch.tv",
+      "tier": 1,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 33000000000,
+      "vaultFull": false,
+      "streak": 5,
+      "checkedToday": false
+    },
+    {
+      "domain": "",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 0,
+      "vaultFull": false,
+      "streak": 0,
+      "checkedToday": false
+    }
+  ]
+}

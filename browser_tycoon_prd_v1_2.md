@@ -256,16 +256,39 @@ Buying Tier I or higher on slot 4+ permanently preserves that slot unlock throug
 `Cache Core` is a global permanent upgrade purchased with Cache Points (`CP`). It persists through Clear Cache resets and increases the base domain rate for every domain and slot.
 
 ```txt
-cache_core_multiplier = 1.5^cache_core_level
-cache_core_cost(current_level) = ceil(5 x 1.5^current_level)
+cache_core_multiplier = 1.45^cache_core_level
+cache_core_cost(current_level) = ceil(5 x 1.85^current_level)
 ```
 
 Cache Core applies before per-domain Traffic Engine scaling:
 
 ```txt
 domain_base_rate =
-  BASE_RATE x cache_core_multiplier x 1.18^traffic_engine_level
+  BASE_RATE x cache_core_multiplier x 1.2^traffic_engine_level
 ```
+
+#### Domain Mastery
+
+`Domain Mastery` is a per-domain permanent upgrade purchased with Cache Points (`CP`) after the player's first Clear Cache. It gives players a long-term reason to specialize in favorite domains without replacing global Cache Core or slot tier upgrades.
+
+- Unlocks after the first Clear Cache
+- Max rank: `50`
+- Persists through Clear Cache
+- Deleted when that domain is deleted from the library
+- Requires both domain-specific mastery lifetime and CP
+
+```txt
+mastery_income_multiplier = 1 + mastery_rank x 0.02
+mastery_vault_cap_multiplier = 1 + mastery_rank x 0.02
+
+mastery_lifetime_requirement(rank) =
+  1,000,000 x rank^3 x 1.6^(rank - 1)
+
+mastery_cp_cost(rank) =
+  ceil(2 x rank^1.65 x 1.24^(rank - 1))
+```
+
+At Rank 50, the domain has `x2.00` income and `x2.00` vault capacity. Mastery lifetime is separate from the current-run domain lifetime counter so it can persist across Clear Cache resets.
 
 ### 3.3 Future Global Upgrades
 
@@ -289,13 +312,14 @@ income_per_sec =
   x tab_multiplier_bonus(level)
   x state_bonus
   x slot_tier_bonus(slot.tier)
+  x mastery_income_multiplier(domain.mastery_rank)
 ```
 
 Where:
 
 ```txt
 domain_base_rate =
-  BASE_RATE x cache_core_multiplier x 1.18^traffic_engine_level
+  BASE_RATE x cache_core_multiplier x 1.2^traffic_engine_level
 ```
 
 Where `state_bonus` is exactly one of:
@@ -378,6 +402,7 @@ Prestige is called **Clear Cache**. It resets run-level progression in exchange 
 
 - Domain library entries created by prior slotting
 - Lifetime earnings history
+- Domain Mastery rank and mastery lifetime
 - Unlocked slot count where applicable
 - Slot tier upgrades
 - Slot streak bonus upgrades

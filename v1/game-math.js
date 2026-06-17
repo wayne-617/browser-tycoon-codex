@@ -19,6 +19,15 @@
   const DAILY_STREAK_BOOT_MULTIPLIER = 0.2;
   const NAVIGATION_EVENT_SECONDS = 18;
   const WAKE_BURST_SECONDS = 105;
+  const MASTERY_RANK_CAP = 50;
+  const MASTERY_INCOME_PER_RANK = 0.02;
+  const MASTERY_VAULT_CAP_PER_RANK = 0.02;
+  const MASTERY_LIFETIME_BASE = 1000000;
+  const MASTERY_LIFETIME_RANK_EXPONENT = 3;
+  const MASTERY_LIFETIME_GROWTH = 1.6;
+  const MASTERY_CC_BASE_COST = 2;
+  const MASTERY_CC_RANK_EXPONENT = 1.65;
+  const MASTERY_CC_GROWTH = 1.24;
   const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 
   const UPGRADE_DEFS = Object.freeze([
@@ -141,6 +150,34 @@
     return Number(entry?.upgrades?.[id] || 0);
   }
 
+  function masteryRank(entry) {
+    return Math.max(0, Math.min(MASTERY_RANK_CAP, Math.floor(Number(entry?.masteryRank || 0))));
+  }
+
+  function masteryIncomeMultiplier(entryOrRank) {
+    const rank = typeof entryOrRank === "number" ? entryOrRank : masteryRank(entryOrRank);
+    return 1 + Math.max(0, Math.min(MASTERY_RANK_CAP, rank)) * MASTERY_INCOME_PER_RANK;
+  }
+
+  function masteryVaultCapMultiplier(entryOrRank) {
+    const rank = typeof entryOrRank === "number" ? entryOrRank : masteryRank(entryOrRank);
+    return 1 + Math.max(0, Math.min(MASTERY_RANK_CAP, rank)) * MASTERY_VAULT_CAP_PER_RANK;
+  }
+
+  function masteryLifetimeRequirement(rank) {
+    const targetRank = Math.max(1, Math.min(MASTERY_RANK_CAP, Math.floor(Number(rank || 1))));
+    return MASTERY_LIFETIME_BASE
+      * Math.pow(targetRank, MASTERY_LIFETIME_RANK_EXPONENT)
+      * Math.pow(MASTERY_LIFETIME_GROWTH, targetRank - 1);
+  }
+
+  function masteryCcCost(rank) {
+    const targetRank = Math.max(1, Math.min(MASTERY_RANK_CAP, Math.floor(Number(rank || 1))));
+    return Math.ceil(MASTERY_CC_BASE_COST
+      * Math.pow(targetRank, MASTERY_CC_RANK_EXPONENT)
+      * Math.pow(MASTERY_CC_GROWTH, targetRank - 1));
+  }
+
   function upgradeCost(def, level) {
     return Math.ceil(def.baseCost * Math.pow(def.growth, level));
   }
@@ -218,16 +255,16 @@
   function vaultCap(entry, coldLevel = getUpgradeLevel(entry, "coldStorage"), cacheCoreLevel = 0, premiumMultiplier = 1) {
     const coreMultiplier = cacheCoreMultiplier(cacheCoreLevel);
     const baseCap = BASE_RATE * coreMultiplier * 60 * 25 * vaultTrafficScale(entry, cacheCoreLevel) * premiumMultiplier;
-    return baseCap * coldStorageMultiplier(coldLevel);
+    return baseCap * coldStorageMultiplier(coldLevel) * masteryVaultCapMultiplier(entry);
   }
 
   function vaultRate(entry, storageLevel = getUpgradeLevel(entry, "storageDuration"), cacheCoreLevel = 0, premiumMultiplier = 1) {
     const coreMultiplier = cacheCoreMultiplier(cacheCoreLevel);
-    return VAULT_RATE * coreMultiplier * vaultTrafficScale(entry, cacheCoreLevel) * vaultPumpMultiplier(storageLevel) * premiumMultiplier;
+    return VAULT_RATE * coreMultiplier * vaultTrafficScale(entry, cacheCoreLevel) * vaultPumpMultiplier(storageLevel) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
   function activeIncomePerSecond(entry, slot, cacheCoreLevel = 0, premiumMultiplier = 1) {
-    return domainBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * focusMultiplier(getUpgradeLevel(entry, "focusBonus")) * slotTierBonus(slot) * premiumMultiplier;
+    return domainBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * focusMultiplier(getUpgradeLevel(entry, "focusBonus")) * slotTierBonus(slot) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
   function backgroundIncomePerSecond(entry, slot, backgroundSince, now, cacheCoreLevel = 0, premiumMultiplier = 1) {
@@ -236,7 +273,7 @@
     const idleLevel = getUpgradeLevel(entry, "idleDepth");
     const idleSeconds = Math.max(0, (now - (backgroundSince || now)) / 1000);
     const idle = 1 + 0.1 * idleLevel * Math.min(idleSeconds / 300, 5);
-    return backgroundBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * hum * idle * slotTierBonus(slot) * premiumMultiplier;
+    return backgroundBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * hum * idle * slotTierBonus(slot) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
   function domainIncomeForState(entry, slot, presence, now, cacheCoreLevel = 0, premiumMultiplier = 1) {
@@ -249,7 +286,7 @@
   function dailyFirstOpenBonusForStreak(entry, slot, streak, cacheCoreLevel = 0, premiumMultiplier = 1) {
     const dailyBoot = getUpgradeLevel(entry, "dailyBoot");
     const slotStreak = slot?.streakBonusTier || 0;
-    const baseDaily = Math.max(20, domainBaseRate(entry, cacheCoreLevel) * 60 * DAILY_BASE_MINUTES) * premiumMultiplier;
+    const baseDaily = Math.max(20, domainBaseRate(entry, cacheCoreLevel) * 60 * DAILY_BASE_MINUTES * masteryIncomeMultiplier(entry)) * premiumMultiplier;
     const streakMultiplier = dailyStreakMultiplier(streak, dailyBoot);
     return baseDaily * dailyBootMultiplier(dailyBoot) * streakMultiplier * (1 + slotStreak * 0.15);
   }
@@ -265,7 +302,7 @@
 
   function wakeBurstForLevel(entry, slot, level, cacheCoreLevel = 0, premiumMultiplier = 1) {
     if (!entry || !slot || level <= 0) return 0;
-    return domainBaseRate(entry, cacheCoreLevel) * WAKE_BURST_SECONDS * Math.pow(level, 1.1) * slotTierBonus(slot) * premiumMultiplier;
+    return domainBaseRate(entry, cacheCoreLevel) * WAKE_BURST_SECONDS * Math.pow(level, 1.1) * slotTierBonus(slot) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
   global.BrowserTycoonMath = Object.freeze({
@@ -289,6 +326,15 @@
     DAILY_STREAK_BOOT_MULTIPLIER,
     NAVIGATION_EVENT_SECONDS,
     WAKE_BURST_SECONDS,
+    MASTERY_RANK_CAP,
+    MASTERY_INCOME_PER_RANK,
+    MASTERY_VAULT_CAP_PER_RANK,
+    MASTERY_LIFETIME_BASE,
+    MASTERY_LIFETIME_RANK_EXPONENT,
+    MASTERY_LIFETIME_GROWTH,
+    MASTERY_CC_BASE_COST,
+    MASTERY_CC_RANK_EXPONENT,
+    MASTERY_CC_GROWTH,
     SCI_ZERO,
     UPGRADE_DEFS,
     SLOT_TIERS,
@@ -303,6 +349,11 @@
     cacheCoreMultiplier,
     cacheCoreCost,
     getUpgradeLevel,
+    masteryRank,
+    masteryIncomeMultiplier,
+    masteryVaultCapMultiplier,
+    masteryLifetimeRequirement,
+    masteryCcCost,
     upgradeCost,
     floorToSignificantFigures,
     slotTierBonus,

@@ -1,0 +1,89 @@
+{
+  "name": "Late Game",
+  "money": 1840000000000,
+  "incomePerSecond": 925000000,
+  "cacheCredits": 14820,
+  "slotsUnlocked": 8,
+  "slots": [
+    {
+      "domain": "youtube.com",
+      "tier": 5,
+      "state": "active",
+      "incomePerSecond": 420000000,
+      "vaultAmount": 68000000000,
+      "vaultFull": true,
+      "streak": 14,
+      "checkedToday": true
+    },
+    {
+      "domain": "claude.ai",
+      "tier": 4,
+      "state": "background",
+      "incomePerSecond": 212000000,
+      "vaultAmount": 43000000000,
+      "vaultFull": true,
+      "streak": 12,
+      "checkedToday": true
+    },
+    {
+      "domain": "reddit.com",
+      "tier": 3,
+      "state": "background",
+      "incomePerSecond": 128000000,
+      "vaultAmount": 29000000000,
+      "vaultFull": false,
+      "streak": 8,
+      "checkedToday": false
+    },
+    {
+      "domain": "docs.google.com",
+      "tier": 2,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 12000000000,
+      "vaultFull": false,
+      "streak": 10,
+      "checkedToday": true
+    },
+    {
+      "domain": "notion.so",
+      "tier": 1,
+      "state": "background",
+      "incomePerSecond": 87000000,
+      "vaultAmount": 18000000000,
+      "vaultFull": true,
+      "streak": 6,
+      "checkedToday": false
+    },
+    {
+      "domain": "openai.com",
+      "tier": 1,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 7600000000,
+      "vaultFull": false,
+      "streak": 4,
+      "checkedToday": false
+    },
+    {
+      "domain": "figma.com",
+      "tier": 0,
+      "state": "background",
+      "incomePerSecond": 78000000,
+      "vaultAmount": 9200000000,
+      "vaultFull": false,
+      "streak": 3,
+      "checkedToday": true
+    },
+    {
+      "domain": "spotify.com",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 3100000000,
+      "vaultFull": false,
+      "streak": 2,
+      "checkedToday": false
+    }
+  ]
+}

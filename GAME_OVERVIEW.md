@@ -135,6 +135,12 @@ Cache Core is a global permanent upgrade purchased with Cache Points. It improve
 
 Unlike domain upgrades, Cache Core is not tied to one website. It is a broad account-level progression system for making future runs faster.
 
+## Domain Mastery
+
+Domain Mastery unlocks after the first Clear Cache and lets players spend Cache Points on a favorite domain. Each rank is permanent for that domain, adds `+2%` domain income and `+2%` vault capacity, and requires both enough domain mastery lifetime earnings and enough Cache Points.
+
+Mastery is meant to be a specialization sink. It persists through Clear Cache, but deleting the domain from the library deletes its mastery too.
+
 ## Clear Cache Prestige
 
 Clear Cache is Browser Tycoon's prestige reset.
@@ -154,6 +160,7 @@ Clear Cache preserves:
 
 - Domain library entries.
 - Lifetime earnings history.
+- Domain Mastery rank and mastery lifetime.
 - Cache Points.
 - Cache Core level.
 - Slot tier upgrades.

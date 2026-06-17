@@ -6,6 +6,9 @@ const {
   SLOT_TIERS,
   SLOT_PRESTIGE_COST_SCALE,
   FIRST_PRESTIGE_LIFETIME_REQUIREMENT,
+  MASTERY_RANK_CAP,
+  MASTERY_INCOME_PER_RANK,
+  MASTERY_VAULT_CAP_PER_RANK,
   SUPPORTER_CORE_MULTIPLIER,
   emptyUpgrades,
   toSci,
@@ -16,6 +19,11 @@ const {
   prestigeTotalFromLifetime,
   cacheCoreMultiplier,
   cacheCoreCost,
+  masteryRank,
+  masteryIncomeMultiplier,
+  masteryVaultCapMultiplier,
+  masteryLifetimeRequirement,
+  masteryCcCost,
   getUpgradeLevel,
   upgradeCost,
   slotTierCost,
@@ -39,6 +47,7 @@ const EVENT_BONUS_COOLDOWN_MS = 60 * 1000;
 const ONBOARDING_STARTER_CASH = 1000;
 const DOMAIN_LIBRARY_LIMIT = 100;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CLAIM_LOCKS = new Set();
 const NOTIFICATION_IDS = {
   vaultFull: "browser-tycoon:vault-full",
   bigPayout: "browser-tycoon:big-payout",
@@ -72,6 +81,8 @@ function normalizeCurrencyState(sync, local) {
   for (const entry of Object.values(local.domainLibrary || {})) {
     entry.vaultAmount = toSci(entry.vaultAmount);
     entry.lifetimeEarned = toSci(entry.lifetimeEarned);
+    entry.masteryLifetimeEarned = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned);
+    entry.masteryRank = masteryRank(entry);
   }
 }
 
@@ -352,6 +363,8 @@ function getDomainEntry(local, domain) {
       vaultLastTickTime: Date.now(),
       lastVisited: 0,
       lifetimeEarned: { ...SCI_ZERO },
+      masteryLifetimeEarned: { ...SCI_ZERO },
+      masteryRank: 0,
       dailyBonusClaimedDate: null,
       insertedOnDate: null,
       currentStreak: 0,
@@ -365,6 +378,8 @@ function getDomainEntry(local, domain) {
   local.domainLibrary[domain].upgrades = { ...emptyUpgrades(), ...upgrades };
   local.domainLibrary[domain].vaultAmount = toSci(local.domainLibrary[domain].vaultAmount);
   local.domainLibrary[domain].lifetimeEarned = toSci(local.domainLibrary[domain].lifetimeEarned);
+  local.domainLibrary[domain].masteryLifetimeEarned = toSci(local.domainLibrary[domain].masteryLifetimeEarned || local.domainLibrary[domain].lifetimeEarned);
+  local.domainLibrary[domain].masteryRank = masteryRank(local.domainLibrary[domain]);
   return local.domainLibrary[domain];
 }
 
@@ -460,9 +475,11 @@ function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0, premiumMultipl
 
 function addEarnings(sync, entry, amount) {
   if (!Number.isFinite(amount) || amount <= 0) return;
+  const currentMasteryLifetime = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned || SCI_ZERO);
   sync.balance = sciAdd(sync.balance, amount);
   sync.totalLifetimeEarned = sciAdd(sync.totalLifetimeEarned, amount);
   entry.lifetimeEarned = sciAdd(entry.lifetimeEarned, amount);
+  entry.masteryLifetimeEarned = sciAdd(currentMasteryLifetime, amount);
 }
 
 function createWelcomeBackAward(local, now) {
@@ -944,6 +961,12 @@ async function getSnapshot() {
       nextMultiplier: cacheCoreMultiplier(sync.cacheCoreLevel + 1),
       nextCost: cacheCoreCost(sync.cacheCoreLevel)
     },
+    mastery: {
+      unlocked: Number(sync.prestigeCount || 0) >= 1,
+      rankCap: MASTERY_RANK_CAP,
+      incomePerRank: MASTERY_INCOME_PER_RANK,
+      vaultCapPerRank: MASTERY_VAULT_CAP_PER_RANK
+    },
     premium: {
       supporterCorePaid: Boolean(local.premiumStatus?.supporterCorePaid),
       email: local.premiumStatus?.email || null,
@@ -971,13 +994,19 @@ async function getSnapshot() {
 }
 
 async function collectWelcomeBack() {
-  const { sync, local } = await getState();
-  const award = local.pendingWelcomeBack;
-  local.pendingWelcomeBack = null;
-  local.lastPopupSeenAt = Date.now();
-  local.lastPopupBalance = sync.balance;
-  await saveState(sync, local);
-  return { ok: true, award };
+  if (CLAIM_LOCKS.has("welcomeBack")) return { ok: false, error: "Collection is already in progress." };
+  CLAIM_LOCKS.add("welcomeBack");
+  try {
+    const { sync, local } = await getState();
+    const award = local.pendingWelcomeBack;
+    local.pendingWelcomeBack = null;
+    local.lastPopupSeenAt = Date.now();
+    local.lastPopupBalance = sync.balance;
+    await saveState(sync, local);
+    return { ok: true, award };
+  } finally {
+    CLAIM_LOCKS.delete("welcomeBack");
+  }
 }
 
 function upgradeBulkCost(def, level, quantity) {
@@ -1120,18 +1149,25 @@ async function deleteDomain(domain) {
 }
 
 async function claimRevisit(domain) {
-  const { sync, local } = await settleAndSave();
-  const slot = sync.slots.find((item) => item.assignedDomain === domain);
-  if (!slot) return { ok: false, error: "Domain is not slotted." };
-  const entry = getDomainEntry(local, domain);
-  const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel, supporterCoreMultiplier(local));
-  if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
-  entry.vaultAmount = { ...SCI_ZERO };
-  local.notificationState = normalizeNotificationState(local.notificationState);
-  local.notificationState.vaultFullNotified = false;
-  addEarnings(sync, entry, payout.total);
-  await saveState(sync, local);
-  return { ok: true, payout };
+  const lockKey = `claim:${domain}`;
+  if (CLAIM_LOCKS.has(lockKey)) return { ok: false, error: "Claim is already in progress." };
+  CLAIM_LOCKS.add(lockKey);
+  try {
+    const { sync, local } = await settleAndSave();
+    const slot = sync.slots.find((item) => item.assignedDomain === domain);
+    if (!slot) return { ok: false, error: "Domain is not slotted." };
+    const entry = getDomainEntry(local, domain);
+    const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel, supporterCoreMultiplier(local));
+    if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
+    entry.vaultAmount = { ...SCI_ZERO };
+    local.notificationState = normalizeNotificationState(local.notificationState);
+    local.notificationState.vaultFullNotified = false;
+    addEarnings(sync, entry, payout.total);
+    await saveState(sync, local);
+    return { ok: true, payout };
+  } finally {
+    CLAIM_LOCKS.delete(lockKey);
+  }
 }
 
 async function unlockNextSlot() {
@@ -1171,6 +1207,36 @@ async function upgradeCacheCore() {
     level: sync.cacheCoreLevel,
     cost,
     multiplier: cacheCoreMultiplier(sync.cacheCoreLevel)
+  };
+}
+
+async function upgradeDomainMastery(domain) {
+  const normalizedDomain = normalizeDomainInput(domain);
+  if (!normalizedDomain) return { ok: false, error: "Choose a valid domain." };
+  const { sync, local } = await settleAndSave();
+  if (Number(sync.prestigeCount || 0) < 1) return { ok: false, error: "Domain Mastery unlocks after your first Clear Cache." };
+  const entry = local.domainLibrary[normalizedDomain];
+  if (!entry) return { ok: false, error: "Domain not found." };
+  entry.masteryLifetimeEarned = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned || SCI_ZERO);
+  entry.masteryRank = masteryRank(entry);
+  if (entry.masteryRank >= MASTERY_RANK_CAP) return { ok: false, error: "Domain Mastery is maxed." };
+  const nextRank = entry.masteryRank + 1;
+  const lifetimeRequirement = masteryLifetimeRequirement(nextRank);
+  if (sciCompare(entry.masteryLifetimeEarned, lifetimeRequirement) < 0) {
+    return { ok: false, error: "Domain lifetime is too low for the next Mastery rank." };
+  }
+  const cost = masteryCcCost(nextRank);
+  if (sync.cacheCredits < cost) return { ok: false, error: "Not enough CC." };
+  sync.cacheCredits -= cost;
+  entry.masteryRank = nextRank;
+  await saveState(sync, local);
+  return {
+    ok: true,
+    domain: normalizedDomain,
+    rank: entry.masteryRank,
+    cost,
+    incomeMultiplier: masteryIncomeMultiplier(entry),
+    vaultCapMultiplier: masteryVaultCapMultiplier(entry)
   };
 }
 
@@ -1237,6 +1303,8 @@ async function devResetLifetime() {
   sync.ccAlreadyClaimedFromLifetime = 0;
   for (const entry of Object.values(local.domainLibrary)) {
     entry.lifetimeEarned = { ...SCI_ZERO };
+    entry.masteryLifetimeEarned = { ...SCI_ZERO };
+    entry.masteryRank = 0;
   }
   await saveState(sync, local);
   return { ok: true };
@@ -1412,6 +1480,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "unlockSlot") return unlockNextSlot();
       if (message.type === "upgradeSlotTier") return upgradeSlotTier(message.slotId);
       if (message.type === "upgradeCacheCore") return upgradeCacheCore();
+      if (message.type === "upgradeDomainMastery") return upgradeDomainMastery(message.domain);
       if (message.type === "prestige") return clearCachePrestige();
       if (message.type === "devAddCash") return devAddCash(message.amount);
       if (message.type === "devAddCachePoints") return devAddCachePoints(message.amount);

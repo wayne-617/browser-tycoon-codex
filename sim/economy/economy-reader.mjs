@@ -64,6 +64,15 @@ export async function readEconomyDefaults(backgroundPath = DEFAULT_BACKGROUND_PA
     dailyStreakBootMultiplier: numberConst(source, "DAILY_STREAK_BOOT_MULTIPLIER", 0.2),
     navigationEventSeconds: numberConst(source, "NAVIGATION_EVENT_SECONDS", 18),
     wakeBurstSeconds: numberConst(source, "WAKE_BURST_SECONDS", 105),
+    masteryRankCap: numberConst(source, "MASTERY_RANK_CAP", 50),
+    masteryIncomePerRank: numberConst(source, "MASTERY_INCOME_PER_RANK", 0.02),
+    masteryVaultCapPerRank: numberConst(source, "MASTERY_VAULT_CAP_PER_RANK", 0.02),
+    masteryLifetimeBase: numberConst(source, "MASTERY_LIFETIME_BASE", 1000000),
+    masteryLifetimeRankExponent: numberConst(source, "MASTERY_LIFETIME_RANK_EXPONENT", 3),
+    masteryLifetimeGrowth: numberConst(source, "MASTERY_LIFETIME_GROWTH", 1.6),
+    masteryCcBaseCost: numberConst(source, "MASTERY_CC_BASE_COST", 2),
+    masteryCcRankExponent: numberConst(source, "MASTERY_CC_RANK_EXPONENT", 1.65),
+    masteryCcGrowth: numberConst(source, "MASTERY_CC_GROWTH", 1.24),
     upgradeDefs: arrayConst(source, "UPGRADE_DEFS", []),
     slotTiers: arrayConst(source, "SLOT_TIERS", [{ tier: 0, cpCost: 0, bonus: 1 }])
   };

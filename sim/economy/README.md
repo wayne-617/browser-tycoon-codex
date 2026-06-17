@@ -27,6 +27,7 @@ The main controls are:
 - vault checks per day
 - starting cash
 - prestige reset mode, reset count, and reset days
+- Domain Mastery enable/disable and tuning controls
 
 Advanced economy and upgrade cost controls are available in collapsible sections.
 
@@ -38,6 +39,8 @@ node sim/economy/run.mjs --focus-minutes 60 --background-minutes 30
 node sim/economy/run.mjs --starting-cash 1000
 node sim/economy/run.mjs --traffic-multiplier 1.2 --prestige-divisor 250000
 node sim/economy/run.mjs --cache-core-multiplier 1.45 --cache-core-base-cost 5 --cache-core-cost-growth 1.85
+node sim/economy/run.mjs --mastery-lifetime-base 1000000 --mastery-lifetime-growth 1.6 --mastery-cc-base-cost 2 --mastery-cc-growth 1.24
+node sim/economy/run.mjs --no-domain-mastery
 node sim/economy/run.mjs --vault-claims-per-day 2 --vault-linear-multiplier 0.12 --vault-poly-multiplier 0.005 --vault-poly-exponent 3
 node sim/economy/run.mjs --vault-traffic-exponent 0.9 --background-traffic-exponent 0.9
 node sim/economy/run.mjs --daily-base-minutes 60 --daily-streak-base-multiplier 0.04 --daily-streak-boot-multiplier 0.2 --navigation-event-seconds 18 --wake-burst-seconds 105
@@ -58,6 +61,9 @@ node sim/economy/run.mjs --days 100 --prestige-mode --prestige-resets 2 --presti
 - Daily first-open payout uses base domain rate times `60` minutes, with streak scaling `1 + 0.04 * streak * (1 + 0.2 * sqrt(Daily Boot level))`
 - Navigation payouts use active income per second times `18` seconds times `sqrt(Navigation Bonus level)` per event
 - Wake payouts use base domain rate times `105` seconds times `Wake Bonus level^1.1`
+- Domain Mastery is enabled. Each rank adds `+2%` income and `+2%` vault cap for that domain.
+- Mastery rank requirements use `1,000,000 * rank^3 * 1.6^(rank - 1)`.
+- Mastery CP costs use `ceil(2 * rank^1.65 * 1.24^(rank - 1))`.
 - `starting-slots`: `3`
 - prestige reset mode enabled with `8` resets after days `4`, `8`, `12`, `16`, `21`, `25`, `29`, and `33`
 - navigation events enabled at `5` per focused hour
@@ -75,9 +81,10 @@ Prestige mode runs scheduled end-of-day resets. Each reset:
 
 - awards newly available cache points from lifetime earnings
 - spends any affordable cache points on the global Cache Core upgrade first
+- spends affordable cache points on Domain Mastery for the strongest mastery-lifetime domain
 - spends cache points on slot tiers from slot 1 upward, maxing each slot as far as possible before moving to the next
 - resets cash, domain upgrades, vaults, and streaks
-- keeps Cache Core, slots 1-3, and any contiguous slot range made permanent by tiered slots
+- keeps Cache Core, Domain Mastery, slots 1-3, and any contiguous slot range made permanent by tiered slots
 
 Reset days outside the total simulation length are ignored, and only the first `--prestige-resets` valid reset days are used.
 

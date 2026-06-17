@@ -1,0 +1,70 @@
+{
+  "name": "Slot Showcase",
+  "money": 4280000000000000,
+  "incomePerSecond": 3485250583,
+  "cacheCredits": 245000,
+  "slotsUnlocked": 6,
+  "balanceIncome": false,
+  "slots": [
+    {
+      "domain": "youtube.com",
+      "tier": 0,
+      "state": "active",
+      "incomePerSecond": 2583,
+      "vaultAmount": 65400,
+      "vaultFull": false,
+      "streak": 3,
+      "checkedToday": true
+    },
+    {
+      "domain": "youtube.com",
+      "tier": 1,
+      "state": "active",
+      "incomePerSecond": 48000,
+      "vaultAmount": 920000,
+      "vaultFull": false,
+      "streak": 7,
+      "checkedToday": true
+    },
+    {
+      "domain": "youtube.com",
+      "tier": 2,
+      "state": "active",
+      "incomePerSecond": 1200000,
+      "vaultAmount": 24000000,
+      "vaultFull": false,
+      "streak": 14,
+      "checkedToday": true
+    },
+    {
+      "domain": "youtube.com",
+      "tier": 3,
+      "state": "active",
+      "incomePerSecond": 64000000,
+      "vaultAmount": 1800000000,
+      "vaultFull": false,
+      "streak": 21,
+      "checkedToday": true
+    },
+    {
+      "domain": "youtube.com",
+      "tier": 4,
+      "state": "active",
+      "incomePerSecond": 820000000,
+      "vaultAmount": 54000000000,
+      "vaultFull": false,
+      "streak": 25,
+      "checkedToday": true
+    },
+    {
+      "domain": "youtube.com",
+      "tier": 5,
+      "state": "active",
+      "incomePerSecond": 2600000000,
+      "vaultAmount": 420000000000,
+      "vaultFull": false,
+      "streak": 28,
+      "checkedToday": true
+    }
+  ]
+}

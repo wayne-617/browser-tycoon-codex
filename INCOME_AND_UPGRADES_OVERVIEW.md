@@ -54,6 +54,7 @@ active_income_per_second =
   x tab_multiplier(level)
   x focus_multiplier(level)
   x slot_tier_bonus
+  x mastery_income_multiplier
 ```
 
 ```txt
@@ -97,6 +98,7 @@ background_income_per_second =
   x background_hum(level)
   x idle_depth_factor
   x slot_tier_bonus
+  x mastery_income_multiplier
 ```
 
 Related upgrades:
@@ -125,6 +127,7 @@ vault_cap =
   x 25
   x traffic_scale
   x 1.35^cold_storage_level
+  x mastery_vault_cap_multiplier
 ```
 
 ```txt
@@ -133,6 +136,7 @@ vault_rate =
   x cache_core_multiplier
   x traffic_scale
   x 1.3^vault_pump_level
+  x mastery_income_multiplier
 ```
 
 Related upgrades:
@@ -141,6 +145,27 @@ Related upgrades:
 - `Vault Pump`: increases vault fill speed.
 - `Traffic Engine`: indirectly improves vault values through `traffic_scale`.
 - `Cache Core`: globally improves vault cap and fill speed.
+- `Domain Mastery`: improves this domain's vault fill speed through income mastery and vault capacity through vault-cap mastery.
+
+## Domain Mastery
+
+Domain Mastery is a per-domain permanent progression layer unlocked after the player's first Clear Cache.
+
+```txt
+mastery_income_multiplier =
+  1 + 0.02 x mastery_rank
+
+mastery_vault_cap_multiplier =
+  1 + 0.02 x mastery_rank
+
+mastery_lifetime_requirement(rank) =
+  1,000,000 x rank^3 x 1.6^(rank - 1)
+
+mastery_cc_cost(rank) =
+  ceil(2 x rank^1.65 x 1.24^(rank - 1))
+```
+
+Mastery rank is capped at `50`, for a maximum `x2.00` income multiplier and `x2.00` vault capacity multiplier. Mastery persists through Clear Cache and is removed if the domain is deleted from the library.
 
 ## Vault Payout
 

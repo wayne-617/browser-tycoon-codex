@@ -27,6 +27,7 @@ let balanceRollFrame = null;
 const FEEDBACK_FORM_URL = "https://forms.gle/GP8nFvBRYaw4nWds5";
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
 const BUY_MODES = ["1", "10"];
+const MASTERY_UI_PREVIEW_RANK = 20;
 const {
   BASE_RATE,
   TRAFFIC_ENGINE_MULTIPLIER,
@@ -36,6 +37,9 @@ const {
   DAILY_BASE_MINUTES,
   NAVIGATION_EVENT_SECONDS,
   WAKE_BURST_SECONDS,
+  MASTERY_RANK_CAP,
+  MASTERY_INCOME_PER_RANK,
+  MASTERY_VAULT_CAP_PER_RANK,
   toSci,
   sciToNumber,
   sciCompare,
@@ -46,6 +50,11 @@ const {
   cacheCoreCost,
   SUPPORTER_CORE_MULTIPLIER,
   getUpgradeLevel: upgradeLevel,
+  masteryRank,
+  masteryIncomeMultiplier,
+  masteryVaultCapMultiplier,
+  masteryLifetimeRequirement,
+  masteryCcCost,
   upgradeCost,
   slotTierBonus,
   slotTierCost: mathSlotTierCost,
@@ -261,7 +270,13 @@ function patchDetail() {
   setText("detailState", state.text);
   setText("detailIncome", `${money(incomeFor(domain))}/sec`);
   setText("detailBaseIncome", `${money(domainBaseRate(entry))}/sec`);
-  setText("detailSlotMultiplier", `x${tierBonus(currentSlot(domain)).toFixed(2)}`);
+  const slot = currentSlot(domain);
+  setText("detailSlotTier", slotTierLabel(slot?.tier || 0));
+  setText("detailSlotMultiplier", `x${tierBonus(slot).toFixed(2)}`);
+  const previewRank = displayMasteryRank(entry);
+  setText("detailMasteryRank", `${previewRank}/${MASTERY_RANK_CAP}`);
+  setText("detailMasteryIncome", `x${masteryIncomeMultiplier(previewRank).toFixed(2)}`);
+  setText("detailMasteryVault", `x${masteryVaultCapMultiplier(previewRank).toFixed(2)}`);
   setText("detailStreak", String(displayStreak(entry)));
   setText("detailLastVisit", dateAgo(entry.lastVisited));
   setDisabled(`[data-action="claim"][data-domain="${CSS.escape(domain)}"]`, sciCompare(entry.vaultAmount, 0) <= 0);
@@ -288,6 +303,10 @@ function patchAffordability(displayBalance = snapshot?.sync?.balance || 0) {
   });
   app.querySelectorAll("[data-action='upgradeCacheCore']").forEach((button) => {
     button.disabled = snapshot.sync.cacheCredits < cacheCoreCost(cacheCoreLevel());
+  });
+  app.querySelectorAll("[data-action='upgradeDomainMastery'][data-domain]").forEach((button) => {
+    const entry = entryFor(button.dataset.domain);
+    button.disabled = !entry || !canUpgradeMastery(entry);
   });
   app.querySelectorAll("[data-action='buy'][data-upgrade][data-domain]").forEach((button) => {
     const entry = entryFor(button.dataset.domain);
@@ -356,7 +375,13 @@ function tierName(tier) {
 }
 
 function tierMaterial(tier) {
-  return ["STANDARD", "BRONZE", "SILVER", "GOLD", "PLATINUM", "PRISMATIC"][tier] || `TIER ${tier}`;
+  return ["BASIC", "BRONZE", "SILVER", "GOLD", "PLATINUM", "PRISMATIC"][tier] || `TIER ${tier}`;
+}
+
+function slotTierLabel(tier) {
+  const material = tierMaterial(tier);
+  const rank = tierName(tier);
+  return rank === "0" ? material : `${material} ${rank}`;
 }
 
 function tierClass(tier) {
@@ -421,6 +446,48 @@ function vaultTrafficScaleEstimate(entry) {
 
 function dailyStreakMultiplierFor(entry, streak = entry?.currentStreak || 0) {
   return dailyStreakMultiplier(streak, upgradeLevel(entry, "dailyBoot"));
+}
+
+function masteryUnlocked() {
+  return Boolean(snapshot?.mastery?.unlocked || Number(snapshot?.sync?.prestigeCount || 0) >= 1);
+}
+
+function masteryLifetime(entry) {
+  return toSci(entry?.masteryLifetimeEarned || entry?.lifetimeEarned || 0);
+}
+
+function displayMasteryRank(entry) {
+  return Math.max(masteryRank(entry), MASTERY_UI_PREVIEW_RANK);
+}
+
+function nextMasteryRank(entry) {
+  const rank = masteryRank(entry);
+  return rank >= MASTERY_RANK_CAP ? null : rank + 1;
+}
+
+function masteryProgress(entry) {
+  const rank = masteryRank(entry);
+  const nextRank = nextMasteryRank(entry);
+  if (!nextRank) return { rank, nextRank: null, requirement: 0, percent: 100, cost: 0, eligible: false };
+  const requirement = masteryLifetimeRequirement(nextRank);
+  const current = sciToNumber(masteryLifetime(entry));
+  const percent = Math.max(0, Math.min(100, requirement > 0 ? (current / requirement) * 100 : 0));
+  return {
+    rank,
+    nextRank,
+    requirement,
+    percent,
+    cost: masteryCcCost(nextRank),
+    eligible: sciCompare(masteryLifetime(entry), requirement) >= 0
+  };
+}
+
+function canUpgradeMastery(entry) {
+  const progress = masteryProgress(entry);
+  return masteryUnlocked()
+    && progress.nextRank
+    && progress.eligible
+    && Number(snapshot?.sync?.cacheCredits || 0) >= progress.cost;
 }
 
 function vaultCap(entry, coldLevel) {
@@ -504,10 +571,11 @@ function currentRateTooltip(domain, entry, slot) {
   const traffic = Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine")).toFixed(2);
   const tab = tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2);
   const tier = tierBonus(slot).toFixed(2);
+  const mastery = masteryIncomeMultiplier(entry).toFixed(2);
   const supporter = supporterCorePaid() ? ` x supporter core (${supporterCoreMultiplier().toFixed(2)})` : "";
   if (presence?.state === "active") {
     const focus = focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2);
-    return `Active rate = domain base (${base}/sec, global base x Cache Core ${cache} x Traffic Engine ${traffic}) x tab multiplier (${tab}) x focus bonus (${focus}) x slot multiplier (${tier})${supporter}.`;
+    return `Active rate = domain base (${base}/sec, global base x Cache Core ${cache} x Traffic Engine ${traffic}) x tab multiplier (${tab}) x focus bonus (${focus}) x slot multiplier (${tier}) x Mastery (${mastery})${supporter}.`;
   }
   if (presence?.state === "background") {
     const backgroundBase = money(backgroundBaseRateEstimate(entry));
@@ -515,7 +583,7 @@ function currentRateTooltip(domain, entry, slot) {
     const hum = (0.08 * upgradeLevel(entry, "backgroundHum")).toFixed(2);
     const idleSeconds = Math.max(0, (Date.now() - (presence.backgroundSince || Date.now())) / 1000);
     const idle = (1 + 0.1 * upgradeLevel(entry, "idleDepth") * Math.min(idleSeconds / 300, 5)).toFixed(2);
-    return `Background rate = background base (${backgroundBase}/sec, global base x Cache Core ${cache} x Traffic contribution ${backgroundTraffic} from Traffic Engine^${BACKGROUND_TRAFFIC_EXPONENT.toFixed(2)}) x tab multiplier (${tab}) x background hum (${hum}) x idle depth (currently ${idle}) x slot multiplier (${tier})${supporter}.`;
+    return `Background rate = background base (${backgroundBase}/sec, global base x Cache Core ${cache} x Traffic contribution ${backgroundTraffic} from Traffic Engine^${BACKGROUND_TRAFFIC_EXPONENT.toFixed(2)}) x tab multiplier (${tab}) x background hum (${hum}) x idle depth (currently ${idle}) x slot multiplier (${tier}) x Mastery (${mastery})${supporter}.`;
   }
   return "Inactive: this domain is not currently open as an active or background tab, so its current rate is $0.00/sec.";
 }
@@ -525,8 +593,10 @@ function vaultTooltip(entry) {
   const traffic = vaultTrafficScaleEstimate(entry).toFixed(2);
   const pump = vaultPumpMultiplier(upgradeLevel(entry, "storageDuration")).toFixed(2);
   const storage = coldStorageMultiplier(upgradeLevel(entry, "coldStorage")).toFixed(2);
+  const masteryIncome = masteryIncomeMultiplier(entry).toFixed(2);
+  const masteryCap = masteryVaultCapMultiplier(entry).toFixed(2);
   const supporter = supporterCorePaid() ? ` x Supporter Core ${supporterCoreMultiplier().toFixed(2)}` : "";
-  return `Vault fill = vault base (${money(BASE_RATE * 0.02)}/sec) x Cache Core ${cache} x vault traffic ${traffic} x Vault Pump ${pump}${supporter}. Vault cap = global base (${money(BASE_RATE)}/sec) x Cache Core ${cache} x 25 minutes x vault traffic ${traffic} x Cold Storage ${storage}${supporter}. Collected vault pays the stored amount.`;
+  return `Vault fill = vault base (${money(BASE_RATE * 0.02)}/sec) x Cache Core ${cache} x vault traffic ${traffic} x Vault Pump ${pump} x Mastery ${masteryIncome}${supporter}. Vault cap = global base (${money(BASE_RATE)}/sec) x Cache Core ${cache} x 25 minutes x vault traffic ${traffic} x Cold Storage ${storage} x Mastery ${masteryCap}${supporter}. Collected vault pays the stored amount.`;
 }
 
 function favicon(domain, className = "slot-icon") {
@@ -997,6 +1067,8 @@ function renderLibraryDomainInfo(entry) {
   return renderDetailStatSection("LIBRARY INFO", [
     ["Status", entry.isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"],
     ["Lifetime", money(entry.lifetimeEarned)],
+    ["Mastery", `Rank ${masteryRank(entry)}/${MASTERY_RANK_CAP}`],
+    ["Mastery Lifetime", money(masteryLifetime(entry))],
     ["Vault", money(entry.vaultAmount)],
     ["Streak", String(displayStreak(entry))],
     ["Last Visit", dateAgo(entry.lastVisited)]
@@ -1061,12 +1133,21 @@ function renderDomainDetailsModal(domain, source = "slot") {
             ["Vault Cap", money(vaultCap(entry))],
             ["Vault Fill", `${money(vaultRate(entry))}/sec`],
             ["Daily First-Open", money(dailyFirstOpenBonus(entry, slot))],
-            ["Daily Base", `${money(Math.max(20, domainBaseRate(entry) * 60 * DAILY_BASE_MINUTES) * supporterCoreMultiplier())}`],
+            ["Daily Base", `${money(Math.max(20, domainBaseRate(entry) * 60 * DAILY_BASE_MINUTES * masteryIncomeMultiplier(entry)) * supporterCoreMultiplier())}`],
             ["Daily Boot", `x${dailyBootMultiplier(dailyBootLevel).toFixed(2)}`],
             ["Streak Mult", `x${dailyStreakMultiplierFor(entry, currentStreak).toFixed(2)}`],
             ["Next Streak Mult", `x${dailyStreakMultiplierFor(entry, nextStreak).toFixed(2)}`],
             ["Slot Streak", `x${(1 + slotStreak * 0.15).toFixed(2)}`],
             ["Next Daily Bonus", money(dailyFirstOpenBonusForStreak(entry, slot, nextStreak))]
+          ])}
+          ${renderDetailStatSection("MASTERY", [
+            ["Rank", `${masteryRank(entry)}/${MASTERY_RANK_CAP}`],
+            ["Mastery Lifetime", money(masteryLifetime(entry))],
+            ["Income", `x${masteryIncomeMultiplier(entry).toFixed(2)}`],
+            ["Vault Cap", `x${masteryVaultCapMultiplier(entry).toFixed(2)}`],
+            ["Per Rank", `+${Math.round(MASTERY_INCOME_PER_RANK * 100)}% income / +${Math.round(MASTERY_VAULT_CAP_PER_RANK * 100)}% vault cap`],
+            ["Next Requirement", nextMasteryRank(entry) ? money(masteryLifetimeRequirement(nextMasteryRank(entry))) : "MAX"],
+            ["Next Cost", nextMasteryRank(entry) ? `${cc(masteryCcCost(nextMasteryRank(entry)))} CC` : "MAX"]
           ])}
           ${renderDetailStatSection("MULTIPLIERS", [
             ["Base Income", `${money(domainBaseRate(entry))}/sec`],
@@ -1074,6 +1155,8 @@ function renderDomainDetailsModal(domain, source = "slot") {
             ["Traffic Scale", `x${Math.pow(TRAFFIC_ENGINE_MULTIPLIER, upgradeLevel(entry, "trafficEngine")).toFixed(2)}`],
             ["Vault Traffic", `x${vaultTrafficScaleEstimate(entry).toFixed(2)}`],
             ["Slot Tier", `x${tierBonus(slot).toFixed(2)}`],
+            ["Mastery Income", `x${masteryIncomeMultiplier(entry).toFixed(2)}`],
+            ["Mastery Vault", `x${masteryVaultCapMultiplier(entry).toFixed(2)}`],
             ...supporterCoreDetailRow(),
             ["Tab", `x${tabMultiplier(upgradeLevel(entry, "tabMultiplier")).toFixed(2)}`],
             ["Focus", `x${focusMultiplier(upgradeLevel(entry, "focusBonus")).toFixed(2)}`],
@@ -1355,7 +1438,7 @@ function renderSlot(slot) {
         ${favicon(domain)}
         <div>
           <div class="slot-domain">${domain} <span class="slot-state ${state.className}" data-field="slot:${domain}:state">${state.text}</span></div>
-          <div class="slot-tier">${tierMaterial(slot.tier)} ${tierName(slot.tier)} | <span data-field="slot:${domain}:income">${money(incomeFor(domain))}</span>/s | VAULT <span data-field="slot:${domain}:vault">${money(entry?.vaultAmount || 0)}</span></div>
+          <div class="slot-tier">${slotTierLabel(slot.tier)} | <span data-field="slot:${domain}:income">${money(incomeFor(domain))}</span>/s | VAULT <span data-field="slot:${domain}:vault">${money(entry?.vaultAmount || 0)}</span></div>
         </div>
       </div>
       <div class="slot-badges">
@@ -1400,6 +1483,54 @@ function renderOnboarding() {
   }
 }
 
+function renderMasteryPanel(entry) {
+  const rank = displayMasteryRank(entry);
+  const income = masteryIncomeMultiplier(rank).toFixed(2);
+  const vault = masteryVaultCapMultiplier(rank).toFixed(2);
+  const previewNextRank = Math.min(MASTERY_RANK_CAP, rank + 1);
+  const previewRequirement = masteryLifetimeRequirement(previewNextRank);
+  const previewCurrent = previewRequirement * 0.72;
+  const previewProgressLabel = `${money(previewCurrent)} / ${money(previewRequirement)} mastery lifetime`;
+  if (!masteryUnlocked()) {
+    return `
+      <div class="mastery-panel">
+        <div class="mastery-header">
+          <div>
+            <div class="mastery-title">DOMAIN MASTERY PREVIEW</div>
+            <small>Income <span data-field="detailMasteryIncome">x${income}</span> | Vault cap <span data-field="detailMasteryVault">x${vault}</span></small>
+          </div>
+          <span class="mastery-rank" data-field="detailMasteryRank">${rank}/${MASTERY_RANK_CAP}</span>
+        </div>
+        <div class="mastery-progress-track" aria-label="Domain Mastery preview progress">
+          <div class="mastery-progress-fill" style="width:72%"></div>
+        </div>
+        <div class="mastery-footer">
+          <small>${previewProgressLabel}</small>
+          <button class="btn btn-prestige" disabled>RANK ${previewNextRank} - ${cc(masteryCcCost(previewNextRank))} CC</button>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="mastery-panel">
+      <div class="mastery-header">
+        <div>
+          <div class="mastery-title">DOMAIN MASTERY</div>
+          <small>Income <span data-field="detailMasteryIncome">x${income}</span> | Vault cap <span data-field="detailMasteryVault">x${vault}</span></small>
+        </div>
+        <span class="mastery-rank" data-field="detailMasteryRank">${rank}/${MASTERY_RANK_CAP}</span>
+      </div>
+      <div class="mastery-progress-track" aria-label="Domain Mastery progress">
+        <div class="mastery-progress-fill" style="width:72%"></div>
+      </div>
+      <div class="mastery-footer">
+        <small>${previewProgressLabel}</small>
+        <button class="btn btn-prestige" disabled>RANK ${previewNextRank} - ${cc(masteryCcCost(previewNextRank))} CC</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderDetail(domain) {
   const entry = entryFor(domain);
   const slot = currentSlot(domain);
@@ -1425,6 +1556,7 @@ function renderDetail(domain) {
             <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(currentRateTooltip(domain, entry, slot))}">?</span>
           </div>
           <small>BASE INCOME: <span data-field="detailBaseIncome">${money(domainBaseRate(entry))}/sec</span></small>
+          <small>SLOT TIER: <span data-field="detailSlotTier">${slotTierLabel(slot.tier)}</span></small>
           <small>SLOT MULTIPLIER: <span data-field="detailSlotMultiplier">x${tierBonus(slot).toFixed(2)}</span></small>
           ${supporterCorePaid() ? `<small>SUPPORTER CORE: <span data-field="detailSupporterCore">x${supporterCoreMultiplier().toFixed(2)} ACTIVE</span></small>` : ""}
           <small>STREAK: <span data-field="detailStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
@@ -1438,6 +1570,7 @@ function renderDetail(domain) {
         </div>
         <button class="btn btn-collect" data-action="claim" data-domain="${domain}" ${sciCompare(entry.vaultAmount, 0) > 0 ? "" : "disabled"}>COLLECT</button>
       </div>
+      ${renderMasteryPanel(entry)}
     `;
   } else {
     const activeUpgradeStep = currentOnboardingStep === "upgradeActive";
@@ -1794,13 +1927,14 @@ function renderLibraryItem(entry, pickSlotId) {
   const action = pickSlotId ? (isSwapCandidate ? "swapDomain" : "assign") : "domainDetails";
   const label = pickSlotId ? (isCurrentPickSlot ? `SLOT ${entry.slotId}` : isSwapCandidate ? "SWAP" : "ASSIGN") : "VIEW";
   const upgradeTotal = Object.values(entry.upgrades || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+  const masteryLabel = masteryUnlocked() || masteryRank(entry) > 0 ? ` | MASTERY R${masteryRank(entry)}` : "";
   return `
     <div class="library-item">
       <div class="slot-info" ${pickSlotId ? "" : `data-action="domainDetails" data-domain="${entry.domain}" data-source="library"`}>
         ${favicon(entry.domain)}
         <div>
           <div class="slot-domain">${entry.domain}</div>
-          <div class="slot-tier">${isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"} | ${upgradeTotal} UPGRADES | ${money(entry.lifetimeEarned)}</div>
+          <div class="slot-tier">${isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"} | ${upgradeTotal} UPGRADES | ${money(entry.lifetimeEarned)}${masteryLabel}</div>
         </div>
       </div>
       <button class="btn" data-action="${action}" data-domain="${entry.domain}" ${pickSlotId ? `data-slot="${pickSlotId}"` : `data-source="library"`} ${isSwapCandidate ? `data-source-slot="${entry.slotId}"` : ""} ${isCurrentPickSlot ? "disabled" : ""}>
@@ -1835,6 +1969,7 @@ function renderDomainSummary(domain) {
         <div class="vault-info">
           <div>STATUS: <span data-field="summaryStatus">${entry.isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"}</span></div>
           <small>LIFETIME: <span data-field="summaryLifetime">${money(entry.lifetimeEarned)}</span> | VAULT: <span data-field="summaryVault">${money(entry.vaultAmount)}</span></small>
+          <small>MASTERY: R${masteryRank(entry)}/${MASTERY_RANK_CAP} | MASTERY LIFETIME: ${money(masteryLifetime(entry))}</small>
           <small>STREAK: <span data-field="summaryStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="summaryLastVisit">${dateAgo(entry.lastVisited)}</span></small>
         </div>
       </div>
@@ -1930,7 +2065,7 @@ async function handleAction(event) {
       variant: "danger",
       kicker: "DELETE DOMAIN",
       title: "DELETE DOMAIN?",
-      body: `Delete ${node.dataset.domain} from your library? This permanently removes its upgrades, vault, streak, lifetime history, and other domain data. If it is assigned to a slot, that slot will be emptied too.`,
+      body: `Delete ${node.dataset.domain} from your library? This permanently removes its upgrades, vault, streak, lifetime history, mastery, and other domain data. If it is assigned to a slot, that slot will be emptied too.`,
       confirmLabel: "DELETE",
       actionType: "deleteDomain",
       payload: { domain: node.dataset.domain },
@@ -1948,6 +2083,7 @@ async function handleAction(event) {
     };
   }
   if (action === "buy") await act("buyUpgrade", { domain: node.dataset.domain, upgradeId: node.dataset.upgrade, mode: buyMode });
+  if (action === "upgradeDomainMastery") await act("upgradeDomainMastery", { domain: node.dataset.domain });
   if (action === "claim") {
     const result = await act("claimRevisit", { domain: node.dataset.domain });
     if (result?.ok && Number(result.payout?.total || 0) > 0) showCollectBurst(result.payout.total);
@@ -2005,7 +2141,7 @@ async function handleAction(event) {
       variant: "danger",
       kicker: "DEV RESET",
       title: "RESET LIFETIME EARNINGS?",
-      body: "This zeroes out total lifetime earned and all per-domain lifetime stats. CC already claimed from lifetime is also reset.",
+      body: "This zeroes out total lifetime earned, domain lifetime, mastery lifetime, and mastery ranks. CC already claimed from lifetime is also reset.",
       confirmLabel: "RESET",
       actionType: "devResetLifetime"
     };
@@ -2103,7 +2239,6 @@ function showCollectBurst(amount) {
     return;
   }
   collectBurst = reward;
-  syncCollectBurstNode();
   const endBalance = liveBalance();
   const startBalance = sciSub(endBalance, reward);
   const shouldRollBalance = money(startBalance) !== money(endBalance);
@@ -2155,6 +2290,7 @@ async function act(type, payload = {}, options = {}) {
   }
   if (type === "prestige") showToast(`CLEAR CACHE AWARDED ${cc(result.award)} CC.`);
   else if (type === "upgradeCacheCore") showToast(`CACHE CORE LEVEL ${result.level}.`);
+  else if (type === "upgradeDomainMastery") showToast(`DOMAIN MASTERY RANK ${result.rank}.`);
   else if (type === "openPremiumPayment") showToast("PAYMENT PAGE OPENED.");
   else if (type === "openPremiumLogin") showToast("RESTORE PAGE OPENED.");
   else if (type === "refreshPremiumStatus") showToast(result.paid ? "SUPPORTER CORE ACTIVE." : "NO PURCHASE FOUND.", result.paid ? "success" : "warning");

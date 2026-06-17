@@ -1,0 +1,49 @@
+{
+  "name": "Early Game",
+  "money": 276920,
+  "incomePerSecond": 2583,
+  "cacheCredits": 0,
+  "slotsUnlocked": 4,
+  "slots": [
+    {
+      "domain": "youtube.com",
+      "tier": 0,
+      "state": "active",
+      "incomePerSecond": 2010,
+      "vaultAmount": 65400,
+      "vaultFull": true,
+      "streak": 3,
+      "checkedToday": true
+    },
+    {
+      "domain": "gmail.com",
+      "tier": 0,
+      "state": "background",
+      "incomePerSecond": 573,
+      "vaultAmount": 12400,
+      "vaultFull": false,
+      "streak": 2,
+      "checkedToday": true
+    },
+    {
+      "domain": "reddit.com",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 90,
+      "vaultFull": false,
+      "streak": 1,
+      "checkedToday": false
+    },
+    {
+      "domain": "claude.ai",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 0,
+      "vaultFull": false,
+      "streak": 0,
+      "checkedToday": false
+    }
+  ]
+}
