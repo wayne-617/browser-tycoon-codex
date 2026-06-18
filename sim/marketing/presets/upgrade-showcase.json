@@ -1,0 +1,59 @@
+{
+  "name": "Upgrade Showcase",
+  "screen": "upgrades",
+  "money": 85000,
+  "incomePerSecond": 42800,
+  "cacheCredits": 12,
+  "slotsUnlocked": 4,
+  "upgradeShowcase": {
+    "domain": "youtube.com",
+    "levels": {
+      "trafficEngine": 28,
+      "tabMultiplier": 18,
+      "focusBonus": 24,
+      "navigationBonus": 12
+    }
+  },
+  "slots": [
+    {
+      "domain": "youtube.com",
+      "tier": 2,
+      "state": "active",
+      "incomePerSecond": 42800,
+      "vaultAmount": 1240000,
+      "vaultFull": false,
+      "streak": 12,
+      "checkedToday": true
+    },
+    {
+      "domain": "claude.ai",
+      "tier": 1,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 420000,
+      "vaultFull": false,
+      "streak": 7,
+      "checkedToday": true
+    },
+    {
+      "domain": "reddit.com",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 180000,
+      "vaultFull": false,
+      "streak": 4,
+      "checkedToday": false
+    },
+    {
+      "domain": "",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 0,
+      "vaultFull": false,
+      "streak": 0,
+      "checkedToday": false
+    }
+  ]
+}

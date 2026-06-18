@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Tycoon",
-  "description": "Turn everyday browsing into an idle tycoon game.",
+  "description": "Turn everyday browsing into an idle tycoon game. Earn cash, upgrade sites, and build your browsing empire.",
   "version": "1.0.0",
   "action": {
     "default_title": "Browser Tycoon",
@@ -37,9 +37,9 @@
     "https://*/*"
   ],
   "icons": {
-    "16": "icons/Icon14_40.png",
-    "32": "icons/Icon14_40.png",
-    "48": "icons/Icon14_40.png",
-    "128": "icons/Icon14_40.png"
+    "16": "icons/b-logo-no-outline.png",
+    "32": "icons/b-logo.png",
+    "48": "icons/b-logo.png",
+    "128": "icons/b-logo.png"
   }
 }

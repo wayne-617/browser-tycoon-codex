@@ -23,6 +23,44 @@ The editor also guards against income drift. When enabled, it compares the top-l
 
 Next slot cost is calculated from the number of unlocked slots using the game's `slotUnlockCost` curve, so it is not a manual config field.
 
+Welcome-back screenshots use an optional `welcomeBack` object:
+
+```json
+{
+  "welcomeBack": {
+    "enabled": true,
+    "secondsAway": 28800,
+    "focus": 245000,
+    "background": 182000,
+    "daily": 96000,
+    "navigation": 32000,
+    "wake": 75000,
+    "other": 15000
+  }
+}
+```
+
+The popup appears when enabled, `secondsAway` is at least 60, and the category total is positive. Zero-value categories are hidden, matching the extension.
+
+Active-upgrade screenshots use `screen: "upgrades"` and an `upgradeShowcase` object:
+
+```json
+{
+  "screen": "upgrades",
+  "upgradeShowcase": {
+    "domain": "youtube.com",
+    "levels": {
+      "trafficEngine": 28,
+      "tabMultiplier": 18,
+      "focusBonus": 24,
+      "navigationBonus": 12
+    }
+  }
+}
+```
+
+Each BUY cost is calculated from the extension's upgrade base cost and growth formula. Buttons are enabled only when current money covers the next level.
+
 ## Presets
 
 ```powershell
@@ -31,6 +69,8 @@ node sim/marketing/run.mjs --preset mid-game
 node sim/marketing/run.mjs --preset late-game
 node sim/marketing/run.mjs --preset prestige-showcase
 node sim/marketing/run.mjs --preset slot-showcase
+node sim/marketing/run.mjs --preset welcome-back
+node sim/marketing/run.mjs --preset upgrade-showcase
 ```
 
 You can also pass a custom config:

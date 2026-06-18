@@ -43,6 +43,7 @@ const ALARM_NAME = "browser-tycoon-accrual";
 const NOTIFICATION_ALARM_NAME = "browser-tycoon-notifications";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
 const WELCOME_BACK_MIN_SECONDS = 60;
+const WELCOME_BACK_RECONCILIATION_EPSILON = 0.005;
 const EVENT_BONUS_COOLDOWN_MS = 60 * 1000;
 const ONBOARDING_STARTER_CASH = 1000;
 const DOMAIN_LIBRARY_LIMIT = 100;
@@ -61,6 +62,7 @@ const DEFAULT_NOTIFICATION_SETTINGS = Object.freeze({
   bigPayout: true,
   streakRisk: true
 });
+const WELCOME_BACK_SOURCES = new Set(["focus", "background", "daily", "navigation", "wake"]);
 
 function makeExtPay() {
   return typeof ExtPay === "function" ? ExtPay(EXTPAY_EXTENSION_ID) : null;
@@ -248,8 +250,10 @@ async function saveOnboardingState(sync, local, complete, step, { grantStarterCa
     };
   }
   if (shouldGrantStarterCash) {
-    sync.balance = sciAdd(sync.balance, ONBOARDING_STARTER_CASH);
-    sync.totalLifetimeEarned = sciAdd(sync.totalLifetimeEarned, ONBOARDING_STARTER_CASH);
+    recordEarnings(sync, local, null, ONBOARDING_STARTER_CASH, {
+      source: "bonus",
+      welcomeBackEligible: false
+    });
     sync.onboardingStarterCashClaimed = true;
   }
   await saveState(sync, local);
@@ -473,13 +477,24 @@ function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0, premiumMultipl
   };
 }
 
-function addEarnings(sync, entry, amount) {
+function recordEarnings(sync, local, entry, amount, { source, now = Date.now(), welcomeBackEligible = true } = {}) {
   if (!Number.isFinite(amount) || amount <= 0) return;
-  const currentMasteryLifetime = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned || SCI_ZERO);
+  if (!source) throw new Error("Positive earnings must declare a source.");
+  if (welcomeBackEligible && !WELCOME_BACK_SOURCES.has(source)) {
+    throw new Error(`Unsupported welcome-back source: ${source}`);
+  }
   sync.balance = sciAdd(sync.balance, amount);
   sync.totalLifetimeEarned = sciAdd(sync.totalLifetimeEarned, amount);
-  entry.lifetimeEarned = sciAdd(entry.lifetimeEarned, amount);
-  entry.masteryLifetimeEarned = sciAdd(currentMasteryLifetime, amount);
+  if (entry) {
+    const currentMasteryLifetime = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned || SCI_ZERO);
+    entry.lifetimeEarned = sciAdd(entry.lifetimeEarned, amount);
+    entry.masteryLifetimeEarned = sciAdd(currentMasteryLifetime, amount);
+  }
+  if (!welcomeBackEligible) {
+    if (local?.lastPopupBalance != null) local.lastPopupBalance = sciAdd(local.lastPopupBalance, amount);
+    return;
+  }
+  recordWelcomeBackAward(local, source, amount, now);
 }
 
 function createWelcomeBackAward(local, now) {
@@ -492,7 +507,8 @@ function createWelcomeBackAward(local, now) {
     other: { ...SCI_ZERO },
     total: { ...SCI_ZERO },
     seconds: Math.floor((now - local.lastPopupSeenAt) / 1000),
-    generatedAt: now
+    generatedAt: now,
+    presentedAt: null
   };
 }
 
@@ -501,8 +517,8 @@ function welcomeBackKnownTotal(award) {
 }
 
 function recordWelcomeBackAward(local, bucket, amount, now) {
-  if (!local.lastPopupSeenAt || !local.lastPopupBalance || amount <= 0) return;
-  if ((now - local.lastPopupSeenAt) / 1000 < WELCOME_BACK_MIN_SECONDS) return;
+  if (!local.lastPopupSeenAt || local.lastPopupBalance == null || amount <= 0) return;
+  if (local.pendingWelcomeBack?.presentedAt) return;
   if (!local.pendingWelcomeBack || sciCompare(local.pendingWelcomeBack.total, 0) <= 0) {
     local.pendingWelcomeBack = createWelcomeBackAward(local, now);
   }
@@ -513,16 +529,15 @@ function recordWelcomeBackAward(local, bucket, amount, now) {
   local.pendingWelcomeBack.generatedAt = now;
 }
 
-function recordWelcomeBackAccrual(local, state, amount, now) {
-  if (!["active", "background"].includes(state)) return;
-  recordWelcomeBackAward(local, state === "active" ? "focus" : "background", amount, now);
-}
-
 function welcomeBackAllBucketTotal(award) {
   return ["focus", "background", "daily", "navigation", "wake", "other"].reduce(
     (total, key) => sciAdd(total, award?.[key] || SCI_ZERO),
     SCI_ZERO
   );
+}
+
+function isMeaningfulWelcomeBackRemainder(value) {
+  return sciCompare(value, 0) > 0 && sciToNumber(value) >= WELCOME_BACK_RECONCILIATION_EPSILON;
 }
 
 function scaleWelcomeBackBucketsToTotal(award, total) {
@@ -535,7 +550,13 @@ function scaleWelcomeBackBucketsToTotal(award, total) {
   }
   if (sciCompare(bucketTotal, total) <= 0) {
     const remainder = sciSub(total, bucketTotal);
-    award.other = sciAdd(award.other || SCI_ZERO, remainder);
+    if (isMeaningfulWelcomeBackRemainder(remainder)) {
+      award.other = sciAdd(award.other || SCI_ZERO, remainder);
+    }
+    award.total = total;
+    return award;
+  }
+  if (!isMeaningfulWelcomeBackRemainder(sciSub(bucketTotal, total))) {
     award.total = total;
     return award;
   }
@@ -556,8 +577,7 @@ function recordFocusedVisitAndDaily(sync, local, entry, slot, now = Date.now()) 
   if (!slot || entry.dailyBonusClaimedDate === today || entry.insertedOnDate === today) return 0;
   const amount = dailyFirstOpenBonus(entry, slot, sync.cacheCoreLevel, supporterCoreMultiplier(local));
   entry.dailyBonusClaimedDate = today;
-  addEarnings(sync, entry, amount);
-  recordWelcomeBackAward(local, "daily", amount, now);
+  recordEarnings(sync, local, entry, amount, { source: "daily", now });
   return amount;
 }
 
@@ -567,8 +587,7 @@ function recordForegroundDomainEvent(sync, local, domain, slot, now = Date.now()
   const lastWake = local.lastWakeBonusAt[domain] || 0;
   if (old?.state === "background" && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
     const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel, supporterCoreMultiplier(local));
-    addEarnings(sync, entry, amount);
-    recordWelcomeBackAward(local, "wake", amount, now);
+    recordEarnings(sync, local, entry, amount, { source: "wake", now });
     local.lastWakeBonusAt[domain] = now;
   }
   recordFocusedVisitAndDaily(sync, local, entry, slot, now);
@@ -583,10 +602,17 @@ function recordForegroundDomainEvent(sync, local, domain, slot, now = Date.now()
 
 function updateWelcomeBack(sync, local, now = Date.now()) {
   const lastSeen = Number(local.lastPopupSeenAt || 0);
-  const lastBalance = local.lastPopupBalance ? toSci(local.lastPopupBalance) : null;
+  const lastBalance = local.lastPopupBalance != null ? toSci(local.lastPopupBalance) : null;
   const elapsedSeconds = (now - lastSeen) / 1000;
 
   if (local.pendingWelcomeBack && sciCompare(local.pendingWelcomeBack.total, 0) > 0) {
+    if (local.pendingWelcomeBack.presentedAt) return local.pendingWelcomeBack;
+    if (elapsedSeconds < WELCOME_BACK_MIN_SECONDS) {
+      local.pendingWelcomeBack = null;
+      local.lastPopupSeenAt = now;
+      local.lastPopupBalance = sync.balance;
+      return null;
+    }
     if (lastBalance) {
       const actualTotal = sciSub(sync.balance, lastBalance);
       if (sciCompare(actualTotal, 0) <= 0) {
@@ -598,6 +624,7 @@ function updateWelcomeBack(sync, local, now = Date.now()) {
       scaleWelcomeBackBucketsToTotal(local.pendingWelcomeBack, actualTotal);
     }
     if (lastSeen) local.pendingWelcomeBack.seconds = Math.floor((now - lastSeen) / 1000);
+    local.pendingWelcomeBack.presentedAt = now;
     local.lastPopupSeenAt = now;
     return local.pendingWelcomeBack;
   }
@@ -621,6 +648,7 @@ function updateWelcomeBack(sync, local, now = Date.now()) {
   award.seconds = Math.floor(elapsedSeconds);
   award.other = actualTotal;
   award.total = actualTotal;
+  award.presentedAt = now;
   local.pendingWelcomeBack = award;
   return award;
 }
@@ -644,8 +672,10 @@ function settleAccrual(sync, local, now = Date.now(), eligibleWindow = null) {
     const liveStateEligible = isLivePresenceEligible(presence, eligibleWindow);
     const liveRate = liveStateEligible ? domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel, premiumMultiplier) : 0;
     const liveGain = liveRate * elapsedSeconds;
-    addEarnings(sync, entry, liveGain);
-    if (liveStateEligible) recordWelcomeBackAccrual(local, presence?.state, liveGain, now);
+    if (liveStateEligible) {
+      const source = presence.state === "active" ? "focus" : "background";
+      recordEarnings(sync, local, entry, liveGain, { source, now });
+    }
     const currentVault = sciToNumber(entry.vaultAmount);
     const vaultGain = Math.min(cap - currentVault, vaultRate(entry, undefined, sync.cacheCoreLevel, premiumMultiplier) * elapsedSeconds);
     if (vaultGain > 0) {
@@ -691,8 +721,7 @@ async function rebuildPresence(sync, local, eligibleWindow = null) {
     if (sameEligibleWindow && old?.state === "background" && state === "active" && slot && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
       const entry = getDomainEntry(local, domain);
       const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel, supporterCoreMultiplier(local));
-      addEarnings(sync, entry, amount);
-      recordWelcomeBackAward(local, "wake", amount, now);
+      recordEarnings(sync, local, entry, amount, { source: "wake", now });
       local.lastWakeBonusAt[domain] = now;
     }
     if (state === "active") recordFocusedVisitAndDaily(sync, local, getDomainEntry(local, domain), slot, now);
@@ -974,7 +1003,7 @@ async function getSnapshot() {
       error: local.premiumStatus?.error || null,
       multiplier: premiumMultiplier,
       productName: "Supporter Core",
-      price: "$2.99",
+      price: "$1.99",
       planNickname: SUPPORTER_CORE_PLAN
     },
     now,
@@ -1162,7 +1191,10 @@ async function claimRevisit(domain) {
     entry.vaultAmount = { ...SCI_ZERO };
     local.notificationState = normalizeNotificationState(local.notificationState);
     local.notificationState.vaultFullNotified = false;
-    addEarnings(sync, entry, payout.total);
+    recordEarnings(sync, local, entry, payout.total, {
+      source: "vault",
+      welcomeBackEligible: false
+    });
     await saveState(sync, local);
     return { ok: true, payout };
   } finally {
@@ -1274,8 +1306,10 @@ async function devAddCash(amount = 1000) {
   const { sync, local } = await settleAndSave();
   const value = Number(amount);
   if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid cash amount." };
-  sync.balance = sciAdd(sync.balance, value);
-  sync.totalLifetimeEarned = sciAdd(sync.totalLifetimeEarned, value);
+  recordEarnings(sync, local, null, value, {
+    source: "bonus",
+    welcomeBackEligible: false
+  });
   await saveState(sync, local);
   return { ok: true, amount: value };
 }
@@ -1399,8 +1433,7 @@ async function navigationBonus(details) {
   }
   const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel, supporterCoreMultiplier(local));
   local.lastNavigationBonusAt[domain] = now;
-  addEarnings(sync, entry, amount);
-  recordWelcomeBackAward(local, "navigation", amount, now);
+  recordEarnings(sync, local, entry, amount, { source: "navigation", now });
   await rebuildPresence(sync, local, eligibleWindow);
   await saveState(sync, local);
   await updateBadge(sync);

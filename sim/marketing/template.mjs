@@ -56,6 +56,9 @@ export function renderMarketingPage(config, paths) {
     .income-guard { margin-top: 10px; color: #aab3cf; font-size: 13px; }
     .income-guard.ok { color: #70ffb1; }
     .income-guard.warn { color: #ffd166; }
+    .form-section { margin: 16px 0; padding-top: 16px; border-top: 1px solid #283047; }
+    .form-section h2 { margin-bottom: 10px; }
+    .welcome-total-preview { margin-top: 10px; color: #70ffb1; font-size: 14px; }
     .preview-frame { width: ${POPUP_WIDTH}px; height: ${POPUP_HEIGHT}px; border: 0; display: block; box-shadow: 0 18px 60px rgba(0,0,0,0.45); }
     .preview-wrap { position: sticky; top: 24px; }
     .preview-label { color: #aab3cf; font-size: 12px; margin: 0 0 8px; text-align: center; }
@@ -85,6 +88,14 @@ export function renderMarketingPage(config, paths) {
             <option value="late">Late Game</option>
             <option value="prestige">Prestige Showcase</option>
             <option value="slotShowcase">Slot Showcase</option>
+            <option value="welcomeBack">Welcome Back</option>
+            <option value="upgradeShowcase">Upgrade Showcase</option>
+          </select>
+        </label>
+        <label>Preview screen
+          <select id="screenInput">
+            <option value="slots">Slots</option>
+            <option value="upgrades">Active Upgrades</option>
           </select>
         </label>
         <label>Current money
@@ -100,6 +111,57 @@ export function renderMarketingPage(config, paths) {
           <input id="slotsUnlockedInput" type="number" min="1" max="12" step="1">
         </label>
       </div>
+      <section class="form-section">
+        <h2>Active Upgrade Page</h2>
+        <div class="form-grid">
+          <label>Domain
+            <input id="upgradeDomainInput" type="text" placeholder="youtube.com">
+          </label>
+          <label>Traffic Engine level
+            <input id="trafficEngineLevelInput" type="number" min="0" step="1">
+          </label>
+          <label>Tab Multiplier level
+            <input id="tabMultiplierLevelInput" type="number" min="0" step="1">
+          </label>
+          <label>Focus Bonus level
+            <input id="focusBonusLevelInput" type="number" min="0" step="1">
+          </label>
+          <label>Navigation Bonus level
+            <input id="navigationBonusLevelInput" type="number" min="0" step="1">
+          </label>
+        </div>
+      </section>
+      <section class="form-section">
+        <h2>Welcome Back Popup</h2>
+        <label class="check-row">
+          <input id="welcomeEnabledInput" type="checkbox">
+          Show welcome-back popup
+        </label>
+        <div class="form-grid" style="margin-top:12px;">
+          <label>Seconds away
+            <input id="welcomeSecondsInput" type="number" min="0" step="1">
+          </label>
+          <label>Focus income
+            <input id="welcomeFocusInput" type="number" min="0" step="1">
+          </label>
+          <label>Background income
+            <input id="welcomeBackgroundInput" type="number" min="0" step="1">
+          </label>
+          <label>Daily first-open
+            <input id="welcomeDailyInput" type="number" min="0" step="1">
+          </label>
+          <label>Navigation bonus
+            <input id="welcomeNavigationInput" type="number" min="0" step="1">
+          </label>
+          <label>Wake bursts
+            <input id="welcomeWakeInput" type="number" min="0" step="1">
+          </label>
+          <label>Other income
+            <input id="welcomeOtherInput" type="number" min="0" step="1">
+          </label>
+        </div>
+        <div id="welcomeTotalPreview" class="welcome-total-preview"></div>
+      </section>
       <label>Slots JSON
         <textarea id="slotsInput" spellcheck="false"></textarea>
       </label>
@@ -127,6 +189,12 @@ export function renderMarketingPage(config, paths) {
     const initialConfig = ${initialConfig};
     const presets = ${jsonScript(builtInPresets())};
     const screenshotMode = new URLSearchParams(location.search).get("screenshot") === "1";
+    const activeUpgradeDefs = [
+      { id: "trafficEngine", name: "Traffic Engine", baseCost: 25, growth: 1.35, icon: 26 },
+      { id: "tabMultiplier", name: "Tab Multiplier", baseCost: 35, growth: 1.5, icon: 13 },
+      { id: "focusBonus", name: "Focus Bonus", baseCost: 25, growth: 1.4, icon: 16 },
+      { id: "navigationBonus", name: "Navigation Bonus", baseCost: 100, growth: 1.65, icon: 37 }
+    ];
     if (screenshotMode) document.body.classList.add("screenshot-mode");
 
     let currentConfig = normalizeConfig(initialConfig);
@@ -172,6 +240,14 @@ export function renderMarketingPage(config, paths) {
     function slotUnlockCost(slotNumber) {
       if (slotNumber <= 3) return 0;
       return floorToSignificantFigures(1000 * Math.pow(100, Math.max(0, slotNumber - 4)));
+    }
+
+    function upgradeCost(def, level) {
+      return Math.ceil(def.baseCost * Math.pow(def.growth, Math.max(0, Number(level || 0))));
+    }
+
+    function extensionIconUrl(index) {
+      return "icons/Icon14_" + String(index).padStart(2, "0") + ".png";
     }
 
     function tierClass(tier) {
@@ -244,6 +320,70 @@ export function renderMarketingPage(config, paths) {
       };
     }
 
+    function normalizeWelcomeBack(value = {}) {
+      return {
+        enabled: Boolean(value.enabled),
+        secondsAway: Math.max(0, Math.floor(Number(value.secondsAway || 0))),
+        focus: Math.max(0, Number(value.focus || 0)),
+        background: Math.max(0, Number(value.background || 0)),
+        daily: Math.max(0, Number(value.daily || 0)),
+        navigation: Math.max(0, Number(value.navigation || 0)),
+        wake: Math.max(0, Number(value.wake || 0)),
+        other: Math.max(0, Number(value.other || 0))
+      };
+    }
+
+    function normalizeUpgradeShowcase(value = {}) {
+      const levels = value.levels || {};
+      return {
+        domain: String(value.domain || "youtube.com").trim() || "youtube.com",
+        levels: Object.fromEntries(activeUpgradeDefs.map((def) => [
+          def.id,
+          Math.max(0, Math.floor(Number(levels[def.id] || 0)))
+        ]))
+      };
+    }
+
+    function welcomeBackTotal(value) {
+      const welcomeBack = normalizeWelcomeBack(value);
+      return ["focus", "background", "daily", "navigation", "wake", "other"]
+        .reduce((sum, key) => sum + welcomeBack[key], 0);
+    }
+
+    function welcomeBackModal(config) {
+      const award = normalizeWelcomeBack(config.welcomeBack);
+      const total = welcomeBackTotal(award);
+      if (!award.enabled || award.secondsAway < 60 || total <= 0) return "";
+      const categories = [
+        ["FOCUS INCOME", award.focus],
+        ["BACKGROUND INCOME", award.background],
+        ["DAILY FIRST-OPEN", award.daily],
+        ["NAVIGATION BONUS", award.navigation],
+        ["WAKE BURSTS", award.wake],
+        ["OTHER INCOME", award.other]
+      ];
+      const rows = categories
+        .filter(([, value]) => value > 0)
+        .map(([label, value]) => {
+          const help = label === "OTHER INCOME"
+            ? '<span class="help-icon" data-tooltip="Includes any positive balance gained while the popup was closed that could not be matched to focus, background, daily first-open, navigation, or wake income.">?</span>'
+            : "";
+          return '<div><span class="welcome-label">' + label + help + '</span><strong>' + compactMoney(value) + '</strong></div>';
+        })
+        .join("");
+      return '<div class="modal-scrim" role="presentation">' +
+        '<section class="modal-panel welcome-back-modal" role="dialog" aria-modal="true" aria-labelledby="welcomeBackTitle">' +
+          '<div class="modal-kicker">WELCOME BACK</div>' +
+          '<h2 id="welcomeBackTitle">CACHE ACCRUED</h2>' +
+          '<p>Your active slots kept generating while the popup was closed.</p>' +
+          '<div class="welcome-breakdown">' + rows +
+            '<div class="welcome-total"><span>TOTAL EARNED</span><strong>' + compactMoney(total) + '</strong></div>' +
+          '</div>' +
+          '<div class="modal-actions single"><button class="btn btn-collect">COLLECT</button></div>' +
+        '</section>' +
+      '</div>';
+    }
+
     function incomeSlots(config) {
       return config.slots.filter((slot) => slot.domain && ["active", "background"].includes(slot.state));
     }
@@ -288,10 +428,13 @@ export function renderMarketingPage(config, paths) {
       while (slots.length < slotsUnlocked) slots.push(normalizeSlot());
       return {
         name: String(config.name || "Marketing Screenshot"),
+        screen: config.screen === "upgrades" ? "upgrades" : "slots",
         money: Math.max(0, Number(config.money || 0)),
         incomePerSecond: Math.max(0, Number(config.incomePerSecond || 0)),
         cacheCredits: Math.max(0, Number(config.cacheCredits || 0)),
         balanceIncome: config.balanceIncome !== false,
+        welcomeBack: normalizeWelcomeBack(config.welcomeBack),
+        upgradeShowcase: normalizeUpgradeShowcase(config.upgradeShowcase),
         slotsUnlocked,
         slots: slots.slice(0, slotsUnlocked).map(normalizeSlot)
       };
@@ -320,7 +463,49 @@ export function renderMarketingPage(config, paths) {
       '</button>';
     }
 
-    function popupDocument(config) {
+    function upgradeCard(config, def) {
+      const level = config.upgradeShowcase.levels[def.id];
+      const cost = upgradeCost(def, level);
+      const affordable = Number(config.money || 0) >= cost;
+      return '<div class="upgrade-item marketing-upgrade-item">' +
+        '<div class="upgrade-info" style="flex:1;">' +
+          '<img class="upgrade-icon" src="' + extensionIconUrl(def.icon) + '" alt="">' +
+          '<div class="upgrade-details marketing-upgrade-details"><div>' +
+            '<span class="upgrade-name">' + def.name + '</span>' +
+            '<span class="upgrade-level">Lvl ' + level + '</span>' +
+          '</div></div>' +
+        '</div>' +
+        '<button class="btn btn-buy" ' + (affordable ? "" : "disabled") + '>' +
+          '<span>BUY</span><span style="font-size:12px">' + compactMoney(cost) + '</span>' +
+        '</button>' +
+      '</div>';
+    }
+
+    function upgradesPage(config) {
+      const domain = config.upgradeShowcase.domain;
+      const slot = config.slots.find((item) => faviconDomain(item.domain) === faviconDomain(domain)) || { domain };
+      const cards = activeUpgradeDefs.map((def) => upgradeCard(config, def)).join("");
+      return '<main class="view active">' +
+        '<div class="view-header">' +
+          '<button class="btn btn-back">&lt; BACK</button>' +
+          '<div class="detail-domain-heading">' +
+            '<img class="detail-favicon" ' + faviconAttrs(slot) + ' alt="">' +
+            '<span class="detail-title">' + escapeHtml(domain.toUpperCase()) + '</span>' +
+            '<button class="btn btn-icon" aria-label="Open domain"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg></button>' +
+          '</div>' +
+          '<button class="btn btn-icon" aria-label="Manage Domain"><svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="12" cy="5" r="2"></circle><circle cx="12" cy="12" r="2"></circle><circle cx="12" cy="19" r="2"></circle></svg></button>' +
+        '</div>' +
+        '<div class="detail-tabs" style="display:flex;gap:10px;margin-bottom:10px;"><button class="btn" style="flex:1;">DASHBOARD</button><button class="btn active" style="flex:1;">UPGRADES</button></div>' +
+        '<div class="upgrade-toolbar" style="display:flex;align-items:stretch;gap:10px;margin-bottom:10px;">' +
+          '<div class="upgrade-tabs" style="display:flex;gap:4px;flex:1;"><button class="btn active" style="flex:1;padding:6px 0;font-size:14px;">ACTIVE</button><button class="btn" style="flex:1;padding:6px 0;font-size:14px;">BACKGROUND</button><button class="btn" style="flex:1;padding:6px 0;font-size:14px;">VAULT</button></div>' +
+          '<div style="width:1px;background:var(--primary);opacity:0.3;margin:4px 0;"></div>' +
+          '<button class="btn" style="padding:6px;font-size:14px;min-width:64px;flex-shrink:0;">BUY 1</button>' +
+        '</div>' +
+        '<div class="upgrade-list">' + cards + '</div>' +
+      '</main>';
+    }
+
+    function slotsPage(config) {
       const slots = config.slots.map(renderSlot).join("");
       const nextSlotNumber = config.slotsUnlocked + 1;
       const nextSlotCost = slotUnlockCost(nextSlotNumber);
@@ -328,11 +513,17 @@ export function renderMarketingPage(config, paths) {
       const unlockSlot = nextSlotCost > 0
         ? '<button class="btn btn-unlock" ' + (canAffordNextSlot ? "" : "disabled") + '>UNLOCK SLOT ' + nextSlotNumber + ' (' + compactMoney(nextSlotCost) + ')</button>'
         : "";
+      return '<main class="view active"><div class="slots-header">DOMAIN SLOTS</div><div class="slots-grid">' + slots + '</div>' + unlockSlot + '</main>';
+    }
+
+    function popupDocument(config) {
+      const page = config.screen === "upgrades" ? upgradesPage(config) : slotsPage(config);
+      const welcomeModal = welcomeBackModal(config);
       return '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
         '<base href="' + popupCssUrl.replace(/popup\\.css$/, "") + '">' +
         '<link rel="stylesheet" href="' + fontsCssUrl + '">' +
         '<link rel="stylesheet" href="' + popupCssUrl + '">' +
-        '<style>button{pointer-events:none}.slot:hover{transform:none}.slot-vault-ready{animation:none}.slot-icon{image-rendering:auto;border-radius:4px}.app-container{height:100%}</style>' +
+        '<style>button{pointer-events:none}.slot:hover{transform:none}.slot-vault-ready{animation:none}.slot-icon,.detail-favicon{image-rendering:auto;border-radius:4px}.marketing-upgrade-details{align-items:flex-start;justify-content:center;text-align:left}.marketing-upgrade-details>div{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%}.app-container{height:100%}</style>' +
         '</head><body>' +
         '<div class="scanlines"></div><div id="app" class="app-container">' +
           '<header class="header">' +
@@ -346,8 +537,9 @@ export function renderMarketingPage(config, paths) {
               '<button class="settings-button">⚙</button>' +
             '</div>' +
           '</header>' +
-          '<main class="view active"><div class="slots-header">DOMAIN SLOTS</div><div class="slots-grid">' + slots + '</div>' + unlockSlot + '</main>' +
+          page +
           '<nav class="footer-nav"><button class="nav-btn active">SLOTS</button><button class="nav-btn">STORE</button><button class="nav-btn">LIBRARY</button></nav>' +
+          welcomeModal +
         '</div><script>function advanceFavicon(img){try{var sources=JSON.parse(img.dataset.faviconSources||"[]");var next=Number(img.dataset.faviconIndex||0)+1;if(next<sources.length){img.dataset.faviconIndex=String(next);img.src=sources[next];return;}}catch{}img.onerror=null;img.src=' + JSON.stringify(fallbackIconUrl) + ';}<\\/script></body></html>';
     }
 
@@ -357,11 +549,26 @@ export function renderMarketingPage(config, paths) {
     }
 
     function writeForm() {
+      document.getElementById("screenInput").value = currentConfig.screen;
       document.getElementById("moneyInput").value = currentConfig.money;
       document.getElementById("incomeInput").value = currentConfig.incomePerSecond;
       document.getElementById("ccInput").value = currentConfig.cacheCredits;
       document.getElementById("slotsUnlockedInput").value = currentConfig.slotsUnlocked;
       document.getElementById("autoBalanceInput").checked = currentConfig.balanceIncome !== false;
+      document.getElementById("welcomeEnabledInput").checked = currentConfig.welcomeBack.enabled;
+      document.getElementById("welcomeSecondsInput").value = currentConfig.welcomeBack.secondsAway;
+      document.getElementById("welcomeFocusInput").value = currentConfig.welcomeBack.focus;
+      document.getElementById("welcomeBackgroundInput").value = currentConfig.welcomeBack.background;
+      document.getElementById("welcomeDailyInput").value = currentConfig.welcomeBack.daily;
+      document.getElementById("welcomeNavigationInput").value = currentConfig.welcomeBack.navigation;
+      document.getElementById("welcomeWakeInput").value = currentConfig.welcomeBack.wake;
+      document.getElementById("welcomeOtherInput").value = currentConfig.welcomeBack.other;
+      document.getElementById("welcomeTotalPreview").textContent = "Total earned: " + compactMoney(welcomeBackTotal(currentConfig.welcomeBack));
+      document.getElementById("upgradeDomainInput").value = currentConfig.upgradeShowcase.domain;
+      document.getElementById("trafficEngineLevelInput").value = currentConfig.upgradeShowcase.levels.trafficEngine;
+      document.getElementById("tabMultiplierLevelInput").value = currentConfig.upgradeShowcase.levels.tabMultiplier;
+      document.getElementById("focusBonusLevelInput").value = currentConfig.upgradeShowcase.levels.focusBonus;
+      document.getElementById("navigationBonusLevelInput").value = currentConfig.upgradeShowcase.levels.navigationBonus;
       document.getElementById("slotsInput").value = JSON.stringify(currentConfig.slots, null, 2);
     }
 
@@ -369,11 +576,31 @@ export function renderMarketingPage(config, paths) {
       const slots = JSON.parse(document.getElementById("slotsInput").value || "[]");
       return normalizeConfig({
         ...currentConfig,
+        screen: document.getElementById("screenInput").value,
         money: document.getElementById("moneyInput").value,
         incomePerSecond: document.getElementById("incomeInput").value,
         cacheCredits: document.getElementById("ccInput").value,
         slotsUnlocked: document.getElementById("slotsUnlockedInput").value,
         balanceIncome: document.getElementById("autoBalanceInput").checked,
+        welcomeBack: {
+          enabled: document.getElementById("welcomeEnabledInput").checked,
+          secondsAway: document.getElementById("welcomeSecondsInput").value,
+          focus: document.getElementById("welcomeFocusInput").value,
+          background: document.getElementById("welcomeBackgroundInput").value,
+          daily: document.getElementById("welcomeDailyInput").value,
+          navigation: document.getElementById("welcomeNavigationInput").value,
+          wake: document.getElementById("welcomeWakeInput").value,
+          other: document.getElementById("welcomeOtherInput").value
+        },
+        upgradeShowcase: {
+          domain: document.getElementById("upgradeDomainInput").value,
+          levels: {
+            trafficEngine: document.getElementById("trafficEngineLevelInput").value,
+            tabMultiplier: document.getElementById("tabMultiplierLevelInput").value,
+            focusBonus: document.getElementById("focusBonusLevelInput").value,
+            navigationBonus: document.getElementById("navigationBonusLevelInput").value
+          }
+        },
         slots
       });
     }
@@ -530,6 +757,52 @@ function builtInPresets() {
         { domain: "youtube.com", tier: 3, state: "active", incomePerSecond: 64000000, vaultAmount: 1800000000, vaultFull: false, streak: 21, checkedToday: true },
         { domain: "youtube.com", tier: 4, state: "active", incomePerSecond: 820000000, vaultAmount: 54000000000, vaultFull: false, streak: 25, checkedToday: true },
         { domain: "youtube.com", tier: 5, state: "active", incomePerSecond: 2600000000, vaultAmount: 420000000000, vaultFull: false, streak: 28, checkedToday: true }
+      ]
+    },
+    welcomeBack: {
+      name: "Welcome Back",
+      money: 1840000,
+      incomePerSecond: 842,
+      cacheCredits: 12,
+      slotsUnlocked: 4,
+      welcomeBack: {
+        enabled: true,
+        secondsAway: 28800,
+        focus: 245000,
+        background: 182000,
+        daily: 96000,
+        navigation: 32000,
+        wake: 75000,
+        other: 15000
+      },
+      slots: [
+        { domain: "youtube.com", tier: 1, state: "active", incomePerSecond: 512, vaultAmount: 184000, vaultFull: false, streak: 8, checkedToday: true },
+        { domain: "claude.ai", tier: 0, state: "background", incomePerSecond: 210, vaultAmount: 92000, vaultFull: false, streak: 5, checkedToday: true },
+        { domain: "reddit.com", tier: 0, state: "background", incomePerSecond: 120, vaultAmount: 46000, vaultFull: false, streak: 3, checkedToday: false },
+        { domain: "gmail.com", tier: 0, state: "inactive", incomePerSecond: 0, vaultAmount: 18000, vaultFull: false, streak: 2, checkedToday: false }
+      ]
+    },
+    upgradeShowcase: {
+      name: "Upgrade Showcase",
+      screen: "upgrades",
+      money: 85000,
+      incomePerSecond: 42800,
+      cacheCredits: 12,
+      slotsUnlocked: 4,
+      upgradeShowcase: {
+        domain: "youtube.com",
+        levels: {
+          trafficEngine: 28,
+          tabMultiplier: 18,
+          focusBonus: 24,
+          navigationBonus: 12
+        }
+      },
+      slots: [
+        { domain: "youtube.com", tier: 2, state: "active", incomePerSecond: 42800, vaultAmount: 1240000, vaultFull: false, streak: 12, checkedToday: true },
+        { domain: "claude.ai", tier: 1, state: "inactive", incomePerSecond: 0, vaultAmount: 420000, vaultFull: false, streak: 7, checkedToday: true },
+        { domain: "reddit.com", tier: 0, state: "inactive", incomePerSecond: 0, vaultAmount: 180000, vaultFull: false, streak: 4, checkedToday: false },
+        { domain: "", tier: 0, state: "inactive", incomePerSecond: 0, vaultAmount: 0, vaultFull: false, streak: 0, checkedToday: false }
       ]
     }
   };

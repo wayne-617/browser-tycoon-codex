@@ -2,3 +2,13 @@ sim/economy/output/
 sim/economy/output-*/
 sim/marketing/output/
 v1-popup-screenshot.png
+
+# Browser Tycoon website (Next.js)
+website/node_modules/
+website/.next/
+website/out/
+website/.vercel/
+website/coverage/
+website/*.tsbuildinfo
+website/.env*
+!website/.env.example
