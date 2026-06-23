@@ -1,0 +1,69 @@
+{
+  "name": "Mid Game",
+  "money": 5280000,
+  "incomePerSecond": 8460,
+  "cacheCredits": 38,
+  "slotsUnlocked": 6,
+  "slots": [
+    {
+      "domain": "youtube.com",
+      "tier": 2,
+      "state": "active",
+      "incomePerSecond": 4100,
+      "vaultAmount": 124000,
+      "vaultFull": true,
+      "streak": 9,
+      "checkedToday": true
+    },
+    {
+      "domain": "claude.ai",
+      "tier": 1,
+      "state": "background",
+      "incomePerSecond": 1880,
+      "vaultAmount": 82400,
+      "vaultFull": false,
+      "streak": 7,
+      "checkedToday": true
+    },
+    {
+      "domain": "reddit.com",
+      "tier": 0,
+      "state": "background",
+      "incomePerSecond": 980,
+      "vaultAmount": 64100,
+      "vaultFull": true,
+      "streak": 4,
+      "checkedToday": false
+    },
+    {
+      "domain": "docs.google.com",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 22600,
+      "vaultFull": false,
+      "streak": 5,
+      "checkedToday": false
+    },
+    {
+      "domain": "notion.so",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 18400,
+      "vaultFull": false,
+      "streak": 2,
+      "checkedToday": true
+    },
+    {
+      "domain": "",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 0,
+      "vaultFull": false,
+      "streak": 0,
+      "checkedToday": false
+    }
+  ]
+}

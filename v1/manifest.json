@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Tycoon",
-  "description": "Turn everyday browsing into an idle tycoon game.",
+  "description": "Turn everyday browsing into an idle tycoon game. Earn cash, upgrade sites, and build your browsing empire.",
   "version": "1.0.0",
   "action": {
     "default_title": "Browser Tycoon",
@@ -10,8 +10,24 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://extensionpay.com/*"
+      ],
+      "js": [
+        "ExtPay.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src https://extensionpay.com https://*.extensionpay.com;"
+  },
   "permissions": [
     "alarms",
+    "favicon",
+    "notifications",
     "storage",
     "tabs",
     "webNavigation"
@@ -21,9 +37,9 @@
     "https://*/*"
   ],
   "icons": {
-    "16": "icons/Icon14_01.png",
-    "32": "icons/Icon14_02.png",
-    "48": "icons/Icon14_03.png",
-    "128": "icons/Icon14_04.png"
+    "16": "icons/b-logo-no-outline.png",
+    "32": "icons/b-logo.png",
+    "48": "icons/b-logo.png",
+    "128": "icons/b-logo.png"
   }
 }

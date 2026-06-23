@@ -1,10 +1,15 @@
-importScripts("game-math.js");
+importScripts("ExtPay.js", "game-math.js");
 
 const {
   SCI_ZERO,
   UPGRADE_DEFS,
   SLOT_TIERS,
   SLOT_PRESTIGE_COST_SCALE,
+  FIRST_PRESTIGE_LIFETIME_REQUIREMENT,
+  MASTERY_RANK_CAP,
+  MASTERY_INCOME_PER_RANK,
+  MASTERY_VAULT_CAP_PER_RANK,
+  SUPPORTER_CORE_MULTIPLIER,
   emptyUpgrades,
   toSci,
   sciToNumber,
@@ -14,6 +19,11 @@ const {
   prestigeTotalFromLifetime,
   cacheCoreMultiplier,
   cacheCoreCost,
+  masteryRank,
+  masteryIncomeMultiplier,
+  masteryVaultCapMultiplier,
+  masteryLifetimeRequirement,
+  masteryCcCost,
   getUpgradeLevel,
   upgradeCost,
   slotTierCost,
@@ -26,10 +36,46 @@ const {
   wakeBurstForLevel
 } = BrowserTycoonMath;
 
+const EXTPAY_EXTENSION_ID = "browser-tycoon";
+const SUPPORTER_CORE_PLAN = "supporter-core";
+const PREMIUM_STATUS_MAX_AGE_MS = 10 * 60 * 1000;
 const ALARM_NAME = "browser-tycoon-accrual";
+const NOTIFICATION_ALARM_NAME = "browser-tycoon-notifications";
 const MAX_SETTLE_SECONDS = 60 * 60 * 24 * 7;
 const WELCOME_BACK_MIN_SECONDS = 60;
-const TODAY = () => new Date().toLocaleDateString("en-CA");
+const WELCOME_BACK_RECONCILIATION_EPSILON = 0.005;
+const EVENT_BONUS_COOLDOWN_MS = 60 * 1000;
+const ONBOARDING_STARTER_CASH = 1000;
+const DOMAIN_LIBRARY_LIMIT = 100;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const CLAIM_LOCKS = new Set();
+const NOTIFICATION_IDS = {
+  vaultFull: "browser-tycoon:vault-full",
+  bigPayout: "browser-tycoon:big-payout",
+  streakRisk: "browser-tycoon:streak-risk"
+};
+const CLOUD_SAVE_KEY = "cloudSave";
+const CLOUD_SAVE_META_KEY = "cloudSaveMeta";
+const DEFAULT_NOTIFICATION_SETTINGS = Object.freeze({
+  enabled: false,
+  vaultFull: true,
+  bigPayout: true,
+  streakRisk: true
+});
+const WELCOME_BACK_SOURCES = new Set(["focus", "background", "daily", "navigation", "wake"]);
+
+function makeExtPay() {
+  return typeof ExtPay === "function" ? ExtPay(EXTPAY_EXTENSION_ID) : null;
+}
+
+const extpay = makeExtPay();
+if (extpay?.startBackground) extpay.startBackground();
+
+function localDateKey(time = Date.now()) {
+  return new Date(time).toLocaleDateString("en-CA");
+}
+
+const TODAY = () => localDateKey();
 
 function normalizeCurrencyState(sync, local) {
   sync.balance = toSci(sync.balance);
@@ -37,6 +83,8 @@ function normalizeCurrencyState(sync, local) {
   for (const entry of Object.values(local.domainLibrary || {})) {
     entry.vaultAmount = toSci(entry.vaultAmount);
     entry.lifetimeEarned = toSci(entry.lifetimeEarned);
+    entry.masteryLifetimeEarned = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned);
+    entry.masteryRank = masteryRank(entry);
   }
 }
 
@@ -44,12 +92,15 @@ function defaultSyncState() {
   return {
     balance: 0,
     totalLifetimeEarned: 0,
-    cachePoints: 0,
-    cpAlreadyClaimedFromLifetime: 0,
+    cacheCredits: 0,
+    ccAlreadyClaimedFromLifetime: 0,
     cacheCoreLevel: 0,
     unlockedSlots: 3,
     prestigeCount: 0,
     onboardingComplete: false,
+    onboardingStep: "intro",
+    onboardingStarterCashClaimed: false,
+    notificationSettings: null,
     slots: [1, 2, 3].map((id) => ({
       id,
       tier: 0,
@@ -65,50 +116,148 @@ function defaultLocalState() {
   return {
     domainLibrary: {},
     presence: {},
+    premiumStatus: {
+      supporterCorePaid: false,
+      email: null,
+      paidAt: null,
+      checkedAt: 0,
+      error: null
+    },
     lastAccrualAt: Date.now(),
     lastNavigationBonusAt: {},
+    lastWakeBonusAt: {},
     lastPopupSeenAt: 0,
     lastPopupBalance: null,
-    pendingWelcomeBack: null
+    pendingWelcomeBack: null,
+    gameSync: null,
+    notificationState: {
+      vaultFullNotified: false,
+      lastBigPayoutCheckAt: 0,
+      lastBigPayoutNotificationAt: 0,
+      lastStreakRiskDate: null
+    }
+  };
+}
+
+function normalizeNotificationSettings(settings, onboardingComplete = false) {
+  if (!settings || typeof settings !== "object") {
+    return {
+      ...DEFAULT_NOTIFICATION_SETTINGS,
+      enabled: Boolean(onboardingComplete)
+    };
+  }
+  const anyTypeEnabled = settings.vaultFull !== false || settings.bigPayout !== false || settings.streakRisk !== false;
+  return {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    ...settings,
+    enabled: anyTypeEnabled,
+    vaultFull: settings.vaultFull !== false,
+    bigPayout: settings.bigPayout !== false,
+    streakRisk: settings.streakRisk !== false
+  };
+}
+
+function normalizeNotificationState(state) {
+  return {
+    vaultFullNotified: Boolean(state?.vaultFullNotified),
+    lastBigPayoutCheckAt: Number(state?.lastBigPayoutCheckAt || 0),
+    lastBigPayoutNotificationAt: Number(state?.lastBigPayoutNotificationAt || 0),
+    lastStreakRiskDate: state?.lastStreakRiskDate || null
   };
 }
 
 async function getState() {
+  const syncRequest = {
+    ...defaultSyncState(),
+    cachePoints: null,
+    cpAlreadyClaimedFromLifetime: null
+  };
   const [syncRaw, localRaw] = await Promise.all([
-    chrome.storage.sync.get(defaultSyncState()),
+    chrome.storage.sync.get(syncRequest),
     chrome.storage.local.get(defaultLocalState())
   ]);
-  const sync = { ...defaultSyncState(), ...syncRaw };
-  sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
   const local = { ...defaultLocalState(), ...localRaw };
+  const gameRaw = localRaw.gameSync && typeof localRaw.gameSync === "object" ? localRaw.gameSync : syncRaw;
+  const sync = { ...defaultSyncState(), ...gameRaw };
+  if (!localRaw.gameSync && syncRaw.cachePoints != null && syncRaw.cacheCredits == null) sync.cacheCredits = syncRaw.cachePoints;
+  if (!localRaw.gameSync && syncRaw.cpAlreadyClaimedFromLifetime != null && syncRaw.ccAlreadyClaimedFromLifetime == null) {
+    sync.ccAlreadyClaimedFromLifetime = syncRaw.cpAlreadyClaimedFromLifetime;
+  }
+  if (!Number.isFinite(sync.cacheCredits)) sync.cacheCredits = 0;
+  if (!Number.isFinite(sync.ccAlreadyClaimedFromLifetime)) sync.ccAlreadyClaimedFromLifetime = 0;
+  sync.notificationSettings = normalizeNotificationSettings(syncRaw.notificationSettings ?? sync.notificationSettings, sync.onboardingComplete);
+  sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
+  local.notificationState = normalizeNotificationState(local.notificationState);
   normalizeCurrencyState(sync, local);
   return { sync, local };
 }
 
-async function saveState(sync, local) {
-  await Promise.all([
-    chrome.storage.sync.set({
+function localStoragePayload(sync, local) {
+  return {
+    gameSync: {
       balance: sync.balance,
       totalLifetimeEarned: sync.totalLifetimeEarned,
-      cachePoints: sync.cachePoints,
-      cpAlreadyClaimedFromLifetime: sync.cpAlreadyClaimedFromLifetime,
+      cacheCredits: sync.cacheCredits,
+      ccAlreadyClaimedFromLifetime: sync.ccAlreadyClaimedFromLifetime,
       cacheCoreLevel: sync.cacheCoreLevel,
       unlockedSlots: sync.unlockedSlots,
       prestigeCount: sync.prestigeCount,
       onboardingComplete: sync.onboardingComplete,
+      onboardingStep: sync.onboardingStep,
+      onboardingStarterCashClaimed: sync.onboardingStarterCashClaimed,
       slots: sync.slots,
       compactDomains: sync.compactDomains
-    }),
-    chrome.storage.local.set({
-      domainLibrary: local.domainLibrary,
-      presence: local.presence,
-      lastAccrualAt: local.lastAccrualAt,
-      lastNavigationBonusAt: local.lastNavigationBonusAt,
-      lastPopupSeenAt: local.lastPopupSeenAt,
-      lastPopupBalance: local.lastPopupBalance,
-      pendingWelcomeBack: local.pendingWelcomeBack
-    })
-  ]);
+    },
+    domainLibrary: local.domainLibrary,
+    presence: local.presence,
+    premiumStatus: local.premiumStatus,
+    lastAccrualAt: local.lastAccrualAt,
+    lastNavigationBonusAt: local.lastNavigationBonusAt,
+    lastWakeBonusAt: local.lastWakeBonusAt,
+    lastPopupSeenAt: local.lastPopupSeenAt,
+    lastPopupBalance: local.lastPopupBalance,
+    pendingWelcomeBack: local.pendingWelcomeBack,
+    notificationState: local.notificationState
+  };
+}
+
+async function saveState(sync, local) {
+  await chrome.storage.local.set(localStoragePayload(sync, local));
+}
+
+async function saveOnboardingState(sync, local, complete, step, { grantStarterCash = false, resetStarterCash = false } = {}) {
+  const nextComplete = Boolean(complete);
+  const nextStep = step || (nextComplete ? "complete" : "intro");
+  const nextStarterCashClaimed = resetStarterCash ? false : sync.onboardingStarterCashClaimed;
+  const shouldGrantStarterCash = grantStarterCash && !sync.onboardingStarterCashClaimed;
+  const shouldEnableNotifications = nextComplete && !sync.onboardingComplete;
+  if (
+    sync.onboardingComplete === nextComplete &&
+    sync.onboardingStep === nextStep &&
+    sync.onboardingStarterCashClaimed === nextStarterCashClaimed &&
+    !shouldGrantStarterCash &&
+    !shouldEnableNotifications
+  ) {
+    return;
+  }
+  sync.onboardingComplete = nextComplete;
+  sync.onboardingStep = nextStep;
+  sync.onboardingStarterCashClaimed = nextStarterCashClaimed;
+  if (shouldEnableNotifications) {
+    sync.notificationSettings = {
+      ...normalizeNotificationSettings(sync.notificationSettings, false),
+      enabled: true
+    };
+  }
+  if (shouldGrantStarterCash) {
+    recordEarnings(sync, local, null, ONBOARDING_STARTER_CASH, {
+      source: "bonus",
+      welcomeBackEligible: false
+    });
+    sync.onboardingStarterCashClaimed = true;
+  }
+  await saveState(sync, local);
+  if (shouldEnableNotifications) await chrome.storage.sync.set({ notificationSettings: sync.notificationSettings });
 }
 
 function normalizeSlots(slots, unlockedSlots) {
@@ -150,6 +299,65 @@ function normalizeDomainInput(input) {
   }
 }
 
+// Tracks whether the extension popup is currently open and which normal window
+// was focused when it opened. This lets getEligibleFocusedWindow() keep counting
+// that window as eligible while the popup is in the foreground.
+let popupOpen = false;
+let popupAnchorWindowId = null;
+let popupAnchorReady = Promise.resolve();
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "popup") return;
+  popupOpen = true;
+  // Capture the focused normal window at the moment the popup opens.
+  popupAnchorReady = chrome.windows.getLastFocused().then((win) => {
+    if (win && win.type === "normal" && win.state !== "minimized") {
+      popupAnchorWindowId = win.id;
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    popupOpen = false;
+    popupAnchorWindowId = null;
+    popupAnchorReady = Promise.resolve();
+    settleAndSave();
+  });
+});
+
+async function getEligibleFocusedWindow() {
+  try {
+    const focused = await chrome.windows.getLastFocused();
+    // Normal case: a real browser window has OS focus.
+    if (focused && focused.focused === true && focused.type === "normal" && focused.state !== "minimized") {
+      return focused;
+    }
+    // Popup case: the extension popup has OS focus.
+    if (popupOpen) {
+      await popupAnchorReady;
+      if (popupAnchorWindowId != null) {
+        try {
+          const win = await chrome.windows.get(popupAnchorWindowId);
+          if (win && win.type === "normal" && win.state !== "minimized") {
+            return win;
+          }
+        } catch {
+          // Anchor window was closed.
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function activeTabInEligibleWindow() {
+  const win = await getEligibleFocusedWindow();
+  if (!win) return null;
+  const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
+  if (!tab || tab.incognito) return null;
+  return tab;
+}
+
 function getDomainEntry(local, domain) {
   if (!local.domainLibrary[domain]) {
     local.domainLibrary[domain] = {
@@ -159,6 +367,8 @@ function getDomainEntry(local, domain) {
       vaultLastTickTime: Date.now(),
       lastVisited: 0,
       lifetimeEarned: { ...SCI_ZERO },
+      masteryLifetimeEarned: { ...SCI_ZERO },
+      masteryRank: 0,
       dailyBonusClaimedDate: null,
       insertedOnDate: null,
       currentStreak: 0,
@@ -172,85 +382,258 @@ function getDomainEntry(local, domain) {
   local.domainLibrary[domain].upgrades = { ...emptyUpgrades(), ...upgrades };
   local.domainLibrary[domain].vaultAmount = toSci(local.domainLibrary[domain].vaultAmount);
   local.domainLibrary[domain].lifetimeEarned = toSci(local.domainLibrary[domain].lifetimeEarned);
+  local.domainLibrary[domain].masteryLifetimeEarned = toSci(local.domainLibrary[domain].masteryLifetimeEarned || local.domainLibrary[domain].lifetimeEarned);
+  local.domainLibrary[domain].masteryRank = masteryRank(local.domainLibrary[domain]);
   return local.domainLibrary[domain];
+}
+
+function canAddDomain(local, domain) {
+  return Boolean(local.domainLibrary[domain]) || Object.keys(local.domainLibrary || {}).length < DOMAIN_LIBRARY_LIMIT;
 }
 
 function entryVisitDate(entry) {
   return entry?.lastVisited ? new Date(entry.lastVisited).toLocaleDateString("en-CA") : null;
 }
 
-function recordFocusedVisit(entry, now = Date.now()) {
-  const today = TODAY();
-  if (entryVisitDate(entry) === today) return;
-  const yesterday = new Date(now - 86400000).toLocaleDateString("en-CA");
-  entry.currentStreak = entryVisitDate(entry) === yesterday ? entry.currentStreak + 1 : 1;
-  entry.lastVisited = now;
+function supporterCoreMultiplier(local) {
+  return local?.premiumStatus?.supporterCorePaid ? SUPPORTER_CORE_MULTIPLIER : 1;
 }
 
-function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0) {
-  const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry, undefined, cacheCoreLevel));
-  const daily = entry.dailyBonusClaimedDate === TODAY() || entry.insertedOnDate === TODAY() ? 0 : dailyFirstOpenBonus(entry, slot, cacheCoreLevel);
+function normalizePremiumStatus(local) {
+  local.premiumStatus = {
+    ...defaultLocalState().premiumStatus,
+    ...(local.premiumStatus || {})
+  };
+  return local.premiumStatus;
+}
+
+async function refreshPremiumStatus(local, { force = false } = {}) {
+  const status = normalizePremiumStatus(local);
+  const fresh = Date.now() - Number(status.checkedAt || 0) < PREMIUM_STATUS_MAX_AGE_MS;
+  if (!force && fresh && status.supporterCorePaid) return status;
+  const currentExtPay = makeExtPay();
+  if (!currentExtPay?.getUser) {
+    local.premiumStatus = {
+      ...status,
+      supporterCorePaid: false,
+      checkedAt: Date.now(),
+      error: "ExtensionPay is not available."
+    };
+    return local.premiumStatus;
+  }
+  try {
+    const user = await currentExtPay.getUser();
+    const planNickname = user?.plan?.nickname || null;
+    const paid = Boolean(user?.paid || user?.paidAt);
+    const hasSupporterCore = Boolean(paid && (!planNickname || planNickname === SUPPORTER_CORE_PLAN));
+    local.premiumStatus = {
+      supporterCorePaid: hasSupporterCore,
+      email: user?.email || null,
+      paidAt: user?.paidAt ? user.paidAt.getTime() : null,
+      checkedAt: Date.now(),
+      error: null
+    };
+  } catch (error) {
+    local.premiumStatus = {
+      ...status,
+      checkedAt: Date.now(),
+      error: error?.message || "Could not check premium status."
+    };
+  }
+  return local.premiumStatus;
+}
+
+function recordFocusedVisit(entry, now = Date.now()) {
+  const today = localDateKey(now);
+  const previousVisitDate = entryVisitDate(entry);
+  if (previousVisitDate === today) {
+    entry.lastVisited = now;
+    return false;
+  }
+  const yesterday = localDateKey(now - 86400000);
+  entry.currentStreak = previousVisitDate === yesterday ? entry.currentStreak + 1 : 1;
+  entry.lastVisited = now;
+  return true;
+}
+
+function normalizeSlottedDomainProgress(entry, cap, now = Date.now()) {
+  if (sciCompare(entry.vaultAmount, cap) > 0) {
+    entry.vaultAmount = toSci(cap);
+  }
+  if (Number(entry.currentStreak || 0) <= 0) return;
+  const visitDate = entryVisitDate(entry);
+  const yesterday = localDateKey(now - 86400000);
+  if (!visitDate || visitDate < yesterday) {
+    entry.currentStreak = 0;
+  }
+}
+
+function computeVaultPayout(entry, slot, now, cacheCoreLevel = 0, premiumMultiplier = 1) {
+  const stored = Math.min(sciToNumber(entry.vaultAmount), vaultCap(entry, undefined, cacheCoreLevel, premiumMultiplier));
   return {
     vault: stored,
-    daily,
-    total: stored + daily
+    daily: 0,
+    total: stored
   };
 }
 
-function addEarnings(sync, entry, amount) {
+function recordEarnings(sync, local, entry, amount, { source, now = Date.now(), welcomeBackEligible = true } = {}) {
   if (!Number.isFinite(amount) || amount <= 0) return;
+  if (!source) throw new Error("Positive earnings must declare a source.");
+  if (welcomeBackEligible && !WELCOME_BACK_SOURCES.has(source)) {
+    throw new Error(`Unsupported welcome-back source: ${source}`);
+  }
   sync.balance = sciAdd(sync.balance, amount);
   sync.totalLifetimeEarned = sciAdd(sync.totalLifetimeEarned, amount);
-  entry.lifetimeEarned = sciAdd(entry.lifetimeEarned, amount);
+  if (entry) {
+    const currentMasteryLifetime = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned || SCI_ZERO);
+    entry.lifetimeEarned = sciAdd(entry.lifetimeEarned, amount);
+    entry.masteryLifetimeEarned = sciAdd(currentMasteryLifetime, amount);
+  }
+  if (!welcomeBackEligible) {
+    if (local?.lastPopupBalance != null) local.lastPopupBalance = sciAdd(local.lastPopupBalance, amount);
+    return;
+  }
+  recordWelcomeBackAward(local, source, amount, now);
 }
 
-function welcomeBackEstimate(sync, local, from, to) {
-  const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (to - from) / 1000));
-  const estimate = {
+function createWelcomeBackAward(local, now) {
+  return {
     focus: { ...SCI_ZERO },
     background: { ...SCI_ZERO },
+    daily: { ...SCI_ZERO },
+    navigation: { ...SCI_ZERO },
+    wake: { ...SCI_ZERO },
+    other: { ...SCI_ZERO },
     total: { ...SCI_ZERO },
-    seconds: Math.floor(elapsedSeconds),
-    generatedAt: to
+    seconds: Math.floor((now - local.lastPopupSeenAt) / 1000),
+    generatedAt: now,
+    presentedAt: null
   };
-  if (elapsedSeconds <= 0) return estimate;
-  for (const slot of sync.slots) {
-    if (!slot.assignedDomain) continue;
-    const domain = slot.assignedDomain;
-    const entry = getDomainEntry(local, domain);
-    const presence = local.presence[domain];
-    if (!presence) continue;
-    const state = presence.state;
-    if (!["active", "background"].includes(state)) continue;
-    const rate = domainIncomeForState(entry, slot, presence, to, sync.cacheCoreLevel);
-    const amount = Number.isFinite(rate) ? rate * elapsedSeconds : 0;
-    if (amount <= 0) continue;
-    const bucket = state === "active" ? "focus" : "background";
-    estimate[bucket] = sciAdd(estimate[bucket], amount);
-    estimate.total = sciAdd(estimate.total, amount);
+}
+
+function welcomeBackKnownTotal(award) {
+  return ["focus", "background", "daily", "navigation", "wake"].reduce((total, key) => sciAdd(total, award?.[key] || SCI_ZERO), SCI_ZERO);
+}
+
+function recordWelcomeBackAward(local, bucket, amount, now) {
+  if (!local.lastPopupSeenAt || local.lastPopupBalance == null || amount <= 0) return;
+  if (local.pendingWelcomeBack?.presentedAt) return;
+  if (!local.pendingWelcomeBack || sciCompare(local.pendingWelcomeBack.total, 0) <= 0) {
+    local.pendingWelcomeBack = createWelcomeBackAward(local, now);
   }
-  return estimate;
+  if (!local.pendingWelcomeBack[bucket]) local.pendingWelcomeBack[bucket] = { ...SCI_ZERO };
+  local.pendingWelcomeBack[bucket] = sciAdd(local.pendingWelcomeBack[bucket], amount);
+  local.pendingWelcomeBack.total = sciAdd(local.pendingWelcomeBack.total, amount);
+  local.pendingWelcomeBack.seconds = Math.floor((now - local.lastPopupSeenAt) / 1000);
+  local.pendingWelcomeBack.generatedAt = now;
+}
+
+function welcomeBackAllBucketTotal(award) {
+  return ["focus", "background", "daily", "navigation", "wake", "other"].reduce(
+    (total, key) => sciAdd(total, award?.[key] || SCI_ZERO),
+    SCI_ZERO
+  );
+}
+
+function isMeaningfulWelcomeBackRemainder(value) {
+  return sciCompare(value, 0) > 0 && sciToNumber(value) >= WELCOME_BACK_RECONCILIATION_EPSILON;
+}
+
+function scaleWelcomeBackBucketsToTotal(award, total) {
+  const bucketKeys = ["focus", "background", "daily", "navigation", "wake", "other"];
+  const bucketTotal = welcomeBackAllBucketTotal(award);
+  if (sciCompare(bucketTotal, 0) <= 0) {
+    award.other = total;
+    award.total = total;
+    return award;
+  }
+  if (sciCompare(bucketTotal, total) <= 0) {
+    const remainder = sciSub(total, bucketTotal);
+    if (isMeaningfulWelcomeBackRemainder(remainder)) {
+      award.other = sciAdd(award.other || SCI_ZERO, remainder);
+    }
+    award.total = total;
+    return award;
+  }
+  if (!isMeaningfulWelcomeBackRemainder(sciSub(bucketTotal, total))) {
+    award.total = total;
+    return award;
+  }
+  const scale = sciToNumber(total) / sciToNumber(bucketTotal);
+  for (const key of bucketKeys) {
+    award[key] = sciToNumber(award[key] || SCI_ZERO) > 0
+      ? sciAdd(0, sciToNumber(award[key]) * scale)
+      : { ...SCI_ZERO };
+  }
+  award.total = total;
+  return award;
+}
+
+function recordFocusedVisitAndDaily(sync, local, entry, slot, now = Date.now()) {
+  const today = TODAY();
+  const isFirstVisitToday = recordFocusedVisit(entry, now);
+  if (!isFirstVisitToday) return 0;
+  if (!slot || entry.dailyBonusClaimedDate === today || entry.insertedOnDate === today) return 0;
+  const amount = dailyFirstOpenBonus(entry, slot, sync.cacheCoreLevel, supporterCoreMultiplier(local));
+  entry.dailyBonusClaimedDate = today;
+  recordEarnings(sync, local, entry, amount, { source: "daily", now });
+  return amount;
+}
+
+function recordForegroundDomainEvent(sync, local, domain, slot, now = Date.now()) {
+  const old = local.presence[domain];
+  const entry = getDomainEntry(local, domain);
+  const lastWake = local.lastWakeBonusAt[domain] || 0;
+  if (old?.state === "background" && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
+    const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel, supporterCoreMultiplier(local));
+    recordEarnings(sync, local, entry, amount, { source: "wake", now });
+    local.lastWakeBonusAt[domain] = now;
+  }
+  recordFocusedVisitAndDaily(sync, local, entry, slot, now);
+  local.presence[domain] = {
+    state: "active",
+    openCount: Math.max(1, Number(old?.openCount || 0)),
+    backgroundSince: null,
+    windowId: old?.windowId || null,
+    updatedAt: now
+  };
 }
 
 function updateWelcomeBack(sync, local, now = Date.now()) {
+  const lastSeen = Number(local.lastPopupSeenAt || 0);
+  const lastBalance = local.lastPopupBalance != null ? toSci(local.lastPopupBalance) : null;
+  const elapsedSeconds = (now - lastSeen) / 1000;
+
   if (local.pendingWelcomeBack && sciCompare(local.pendingWelcomeBack.total, 0) > 0) {
-    local.lastPopupSeenAt = now;
-    if (local.lastPopupBalance) {
-      const actualTotal = sciSub(sync.balance, local.lastPopupBalance);
-      if (sciCompare(actualTotal, local.pendingWelcomeBack.total) > 0) {
-        local.pendingWelcomeBack.total = actualTotal;
-      }
+    if (local.pendingWelcomeBack.presentedAt) return local.pendingWelcomeBack;
+    if (elapsedSeconds < WELCOME_BACK_MIN_SECONDS) {
+      local.pendingWelcomeBack = null;
+      local.lastPopupSeenAt = now;
+      local.lastPopupBalance = sync.balance;
+      return null;
     }
+    if (lastBalance) {
+      const actualTotal = sciSub(sync.balance, lastBalance);
+      if (sciCompare(actualTotal, 0) <= 0) {
+        local.pendingWelcomeBack = null;
+        local.lastPopupSeenAt = now;
+        local.lastPopupBalance = sync.balance;
+        return null;
+      }
+      scaleWelcomeBackBucketsToTotal(local.pendingWelcomeBack, actualTotal);
+    }
+    if (lastSeen) local.pendingWelcomeBack.seconds = Math.floor((now - lastSeen) / 1000);
+    local.pendingWelcomeBack.presentedAt = now;
+    local.lastPopupSeenAt = now;
     return local.pendingWelcomeBack;
   }
-  const lastSeen = Number(local.lastPopupSeenAt || 0);
-  const lastBalance = local.lastPopupBalance ? toSci(local.lastPopupBalance) : null;
+
   local.lastPopupSeenAt = now;
   if (!lastSeen || !lastBalance) {
     local.lastPopupBalance = sync.balance;
     return null;
   }
-  const elapsedSeconds = (now - lastSeen) / 1000;
   if (elapsedSeconds < WELCOME_BACK_MIN_SECONDS) {
     local.lastPopupBalance = sync.balance;
     return null;
@@ -260,50 +643,68 @@ function updateWelcomeBack(sync, local, now = Date.now()) {
     local.lastPopupBalance = sync.balance;
     return null;
   }
-  const estimate = welcomeBackEstimate(sync, local, lastSeen, now);
-  estimate.total = actualTotal;
-  local.pendingWelcomeBack = estimate;
-  return estimate;
+
+  const award = createWelcomeBackAward({ ...local, lastPopupSeenAt: lastSeen }, now);
+  award.seconds = Math.floor(elapsedSeconds);
+  award.other = actualTotal;
+  award.total = actualTotal;
+  award.presentedAt = now;
+  local.pendingWelcomeBack = award;
+  return award;
 }
 
-function settleAccrual(sync, local, now = Date.now()) {
+function isLivePresenceEligible(presence, eligibleWindow) {
+  if (!["active", "background"].includes(presence?.state)) return false;
+  if (!eligibleWindow) return false;
+  return Number(presence.windowId) === Number(eligibleWindow.id);
+}
+
+function settleAccrual(sync, local, now = Date.now(), eligibleWindow = null) {
   const elapsedSeconds = Math.min(MAX_SETTLE_SECONDS, Math.max(0, (now - (local.lastAccrualAt || now)) / 1000));
-  if (elapsedSeconds <= 0) {
-    local.lastAccrualAt = now;
-    return;
-  }
   for (const slot of sync.slots) {
     if (!slot.assignedDomain) continue;
     const entry = getDomainEntry(local, slot.assignedDomain);
+    const premiumMultiplier = supporterCoreMultiplier(local);
+    const cap = vaultCap(entry, undefined, sync.cacheCoreLevel, premiumMultiplier);
+    normalizeSlottedDomainProgress(entry, cap, now);
+    if (elapsedSeconds <= 0) continue;
     const presence = local.presence[slot.assignedDomain];
-    const liveRate = domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel);
-    addEarnings(sync, entry, liveRate * elapsedSeconds);
-    const cap = vaultCap(entry, undefined, sync.cacheCoreLevel);
+    const liveStateEligible = isLivePresenceEligible(presence, eligibleWindow);
+    const liveRate = liveStateEligible ? domainIncomeForState(entry, slot, presence, now, sync.cacheCoreLevel, premiumMultiplier) : 0;
+    const liveGain = liveRate * elapsedSeconds;
+    if (liveStateEligible) {
+      const source = presence.state === "active" ? "focus" : "background";
+      recordEarnings(sync, local, entry, liveGain, { source, now });
+    }
     const currentVault = sciToNumber(entry.vaultAmount);
-    const vaultGain = Math.min(cap - currentVault, vaultRate(entry, undefined, sync.cacheCoreLevel) * elapsedSeconds);
+    const vaultGain = Math.min(cap - currentVault, vaultRate(entry, undefined, sync.cacheCoreLevel, premiumMultiplier) * elapsedSeconds);
     if (vaultGain > 0) {
       entry.vaultAmount = sciAdd(entry.vaultAmount, vaultGain);
+      if (sciCompare(entry.vaultAmount, cap) > 0) entry.vaultAmount = toSci(cap);
       entry.vaultLastTickTime = now;
     }
   }
   local.lastAccrualAt = now;
 }
 
-async function rebuildPresence(sync, local) {
-  const [tabs, activeTabs] = await Promise.all([
-    chrome.tabs.query({}),
-    chrome.tabs.query({ active: true, lastFocusedWindow: true })
-  ]);
-  const foregroundDomain = normalizeDomainFromUrl(activeTabs[0]?.url);
+async function rebuildPresence(sync, local, eligibleWindow = null) {
+  const win = eligibleWindow || await getEligibleFocusedWindow();
+  const tabs = win ? await chrome.tabs.query({ windowId: win.id }) : [];
+  const activeTab = tabs.find((tab) => tab.active && !tab.incognito);
+  const foregroundDomain = normalizeDomainFromUrl(activeTab?.url);
   const domains = {};
-  for (const tab of tabs) {
-    if (tab.incognito) continue;
-    const domain = normalizeDomainFromUrl(tab.url);
-    if (!domain) continue;
-    domains[domain] ||= { openCount: 0, active: false };
-    domains[domain].openCount += 1;
-    if (domain === foregroundDomain) domains[domain].active = true;
+
+  if (win) {
+    for (const tab of tabs) {
+      if (tab.incognito) continue;
+      const domain = normalizeDomainFromUrl(tab.url);
+      if (!domain) continue;
+      domains[domain] ||= { openCount: 0, active: false };
+      domains[domain].openCount += 1;
+      if (tab.active && domain === foregroundDomain) domains[domain].active = true;
+    }
   }
+
   const slotted = new Set(sync.slots.map((slot) => slot.assignedDomain).filter(Boolean));
   const now = Date.now();
   const next = {};
@@ -314,15 +715,21 @@ async function rebuildPresence(sync, local) {
     let state = "closed";
     if (seen?.active) state = "active";
     else if (seen?.openCount > 0) state = "background";
-    if (old?.state === "background" && state === "active" && slot) {
+
+    const sameEligibleWindow = win && Number(old?.windowId) === Number(win.id);
+    const lastWake = local.lastWakeBonusAt[domain] || 0;
+    if (sameEligibleWindow && old?.state === "background" && state === "active" && slot && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
       const entry = getDomainEntry(local, domain);
-      addEarnings(sync, entry, wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel));
+      const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel, supporterCoreMultiplier(local));
+      recordEarnings(sync, local, entry, amount, { source: "wake", now });
+      local.lastWakeBonusAt[domain] = now;
     }
-    if (state === "active") recordFocusedVisit(getDomainEntry(local, domain), now);
+    if (state === "active") recordFocusedVisitAndDaily(sync, local, getDomainEntry(local, domain), slot, now);
     next[domain] = {
       state,
       openCount: seen?.openCount || 0,
-      backgroundSince: state === "background" ? old?.backgroundSince || now : null,
+      backgroundSince: state === "background" ? (sameEligibleWindow ? old?.backgroundSince || now : now) : null,
+      windowId: ["active", "background"].includes(state) ? win.id : null,
       updatedAt: now
     };
   }
@@ -331,8 +738,9 @@ async function rebuildPresence(sync, local) {
 
 async function settleAndSave({ rebuild = true } = {}) {
   const { sync, local } = await getState();
-  if (rebuild) await rebuildPresence(sync, local);
-  settleAccrual(sync, local);
+  const eligibleWindow = await getEligibleFocusedWindow();
+  settleAccrual(sync, local, Date.now(), eligibleWindow);
+  if (rebuild) await rebuildPresence(sync, local, eligibleWindow);
   await saveState(sync, local);
   await updateBadge(sync);
   return { sync, local };
@@ -340,7 +748,8 @@ async function settleAndSave({ rebuild = true } = {}) {
 
 async function updateBadge(sync) {
   const local = await chrome.storage.local.get(defaultLocalState());
-  const cps = Math.max(0, Math.floor(currentIncomePerSecond(sync, local.domainLibrary || {}, local.presence || {})));
+  normalizePremiumStatus(local);
+  const cps = Math.max(0, Math.floor(currentIncomePerSecond(sync, local.domainLibrary || {}, local.presence || {}, supporterCoreMultiplier(local))));
   await chrome.action.setBadgeText({ text: formatBadgeIncome(cps) });
 }
 
@@ -358,28 +767,217 @@ function formatBadgeIncome(value) {
   return `${rounded}${suffixes[suffixIndex]}`;
 }
 
-function currentIncomePerSecond(sync, library, presence) {
-  const incomes = currentSlotIncomes(sync, library, presence);
+function formatNotificationMoney(value) {
+  const sci = toSci(value);
+  if (sci.m === 0) return "$0.00";
+  if (sci.e < 3) return `$${sciToNumber(sci).toFixed(2)}`;
+  const suffixes = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+  const suffix = Math.floor(sci.e / 3);
+  if (suffix > 0 && suffix < suffixes.length) {
+    const amount = sci.m * Math.pow(10, sci.e - suffix * 3);
+    return `$${amount.toFixed(2)}${suffixes[suffix]}`;
+  }
+  return `$${sci.m.toFixed(2)}e${sci.e}`;
+}
+
+function makeCloudSave(sync, local) {
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    gameSync: localStoragePayload(sync, local).gameSync,
+    domainLibrary: local.domainLibrary,
+    notificationSettings: sync.notificationSettings,
+    metadata: {
+      totalLifetimeEarned: sync.totalLifetimeEarned,
+      cacheCredits: sync.cacheCredits,
+      unlockedSlots: sync.unlockedSlots,
+      prestigeCount: sync.prestigeCount
+    }
+  };
+}
+
+function cloudSaveMetadata(save) {
+  if (!save?.savedAt || !save?.gameSync) return null;
+  return {
+    savedAt: save.savedAt,
+    totalLifetimeEarned: save.metadata?.totalLifetimeEarned || save.gameSync.totalLifetimeEarned || SCI_ZERO,
+    cacheCredits: Number(save.metadata?.cacheCredits ?? save.gameSync.cacheCredits ?? 0),
+    unlockedSlots: Number(save.metadata?.unlockedSlots ?? save.gameSync.unlockedSlots ?? 3),
+    prestigeCount: Number(save.metadata?.prestigeCount ?? save.gameSync.prestigeCount ?? 0)
+  };
+}
+
+async function getCloudSaveMeta() {
+  const result = await chrome.storage.sync.get({ [CLOUD_SAVE_META_KEY]: null });
+  return result[CLOUD_SAVE_META_KEY] || null;
+}
+
+async function syncCloudSave() {
+  const { sync, local } = await settleAndSave();
+  const cloudSave = makeCloudSave(sync, local);
+  await chrome.storage.sync.set({
+    [CLOUD_SAVE_KEY]: cloudSave,
+    [CLOUD_SAVE_META_KEY]: cloudSaveMetadata(cloudSave),
+    notificationSettings: sync.notificationSettings
+  });
+  return { ok: true, cloudSaveMeta: cloudSaveMetadata(cloudSave) };
+}
+
+async function loadCloudSave() {
+  const result = await chrome.storage.sync.get({ [CLOUD_SAVE_KEY]: null, notificationSettings: null });
+  const cloudSave = result[CLOUD_SAVE_KEY];
+  if (!cloudSave?.gameSync) return { ok: false, error: "No synced save found." };
+  const sync = {
+    ...defaultSyncState(),
+    ...cloudSave.gameSync,
+    notificationSettings: normalizeNotificationSettings(result.notificationSettings ?? cloudSave.notificationSettings, cloudSave.gameSync.onboardingComplete)
+  };
+  sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
+  const local = {
+    ...defaultLocalState(),
+    domainLibrary: cloudSave.domainLibrary || {},
+    lastAccrualAt: Date.now(),
+    lastPopupSeenAt: Date.now(),
+    lastPopupBalance: sync.balance
+  };
+  normalizeCurrencyState(sync, local);
+  await saveState(sync, local);
+  if (cloudSave.notificationSettings && !result.notificationSettings) {
+    await chrome.storage.sync.set({ notificationSettings: sync.notificationSettings });
+  }
+  await updateBadge(sync);
+  return { ok: true, cloudSaveMeta: cloudSaveMetadata(cloudSave) };
+}
+
+function sciMulScalar(value, scalar) {
+  const sci = toSci(value);
+  if (sci.m === 0 || !Number.isFinite(scalar) || scalar <= 0) return { ...SCI_ZERO };
+  return toSci({ m: sci.m * scalar, e: sci.e });
+}
+
+function slottedDomains(sync, local) {
+  return sync.slots
+    .filter((slot) => slot.assignedDomain)
+    .map((slot) => ({
+      slot,
+      entry: getDomainEntry(local, slot.assignedDomain)
+    }));
+}
+
+function allVaultsFull(sync, local) {
+  const domains = slottedDomains(sync, local);
+  if (!domains.length) return false;
+  const premiumMultiplier = supporterCoreMultiplier(local);
+  return domains.every(({ slot, entry }) => {
+    return sciCompare(entry.vaultAmount, vaultCap(entry, undefined, sync.cacheCoreLevel, premiumMultiplier)) >= 0;
+  });
+}
+
+function streakRiskDomains(sync, local, now) {
+  const today = localDateKey(now);
+  return slottedDomains(sync, local).filter(({ entry }) => {
+    return Number(entry.currentStreak || 0) >= 3 && entryVisitDate(entry) !== today;
+  });
+}
+
+async function notifyPlayer(id, title, message) {
+  await chrome.notifications.create(id, {
+    type: "basic",
+    iconUrl: "icons/Icon14_40.png",
+    title,
+    message,
+    priority: 1
+  });
+}
+
+async function maybeSendEngagementNotifications() {
+  const { sync, local } = await settleAndSave();
+  const settings = normalizeNotificationSettings(sync.notificationSettings, sync.onboardingComplete);
+  const memory = normalizeNotificationState(local.notificationState);
+  local.notificationState = memory;
+  const now = Date.now();
+  let changed = false;
+
+  if (!settings.enabled || !sync.onboardingComplete) {
+    await chrome.storage.local.set({ notificationState: local.notificationState });
+    return;
+  }
+
+  const fullVaults = allVaultsFull(sync, local);
+  if (settings.vaultFull && fullVaults && !memory.vaultFullNotified) {
+    await notifyPlayer(
+      NOTIFICATION_IDS.vaultFull,
+      "All vaults are full",
+      "Your domains are capped. Open Browser Tycoon and collect before more cash gets boxed out."
+    );
+    memory.vaultFullNotified = true;
+    changed = true;
+  } else if (!fullVaults && memory.vaultFullNotified) {
+    memory.vaultFullNotified = false;
+    changed = true;
+  }
+
+  if (settings.bigPayout && now - Number(local.lastPopupSeenAt || 0) >= DAY_MS && now - memory.lastBigPayoutCheckAt >= DAY_MS) {
+    const payout = local.lastPopupBalance ? sciSub(sync.balance, local.lastPopupBalance) : SCI_ZERO;
+    const threshold = sciMulScalar(sync.balance, 0.2);
+    memory.lastBigPayoutCheckAt = now;
+    changed = true;
+    if (sciCompare(payout, threshold) >= 0 && sciCompare(payout, 0) > 0) {
+      await notifyPlayer(
+        NOTIFICATION_IDS.bigPayout,
+        `${formatNotificationMoney(payout)} is waiting`,
+        "Your browsing empire has been working for a day. Open Browser Tycoon to collect and upgrade."
+      );
+      memory.lastBigPayoutNotificationAt = now;
+    }
+  }
+
+  const localHour = Number(new Date(now).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit" }));
+  const today = localDateKey(now);
+  if (settings.streakRisk && localHour >= 19 && memory.lastStreakRiskDate !== today) {
+    const atRisk = streakRiskDomains(sync, local, now);
+    if (atRisk.length) {
+      const domain = atRisk[0].entry.domain;
+      await notifyPlayer(
+        NOTIFICATION_IDS.streakRisk,
+        "A streak is at risk",
+        `${domain} has a ${atRisk[0].entry.currentStreak}-day streak. Visit a slotted domain today to keep it alive.`
+      );
+      memory.lastStreakRiskDate = today;
+      changed = true;
+    }
+  }
+
+  if (changed) await chrome.storage.local.set({ notificationState: local.notificationState });
+}
+
+function currentIncomePerSecond(sync, library, presence, premiumMultiplier = 1) {
+  const incomes = currentSlotIncomes(sync, library, presence, Date.now(), premiumMultiplier);
   return Object.values(incomes).reduce((sum, value) => sum + value, 0);
 }
 
-function currentSlotIncomes(sync, library, presence, now = Date.now()) {
+function currentSlotIncomes(sync, library, presence, now = Date.now(), premiumMultiplier = 1) {
   return sync.slots.reduce((incomes, slot) => {
     if (!slot.assignedDomain) return incomes;
     const domain = slot.assignedDomain;
-    incomes[domain] = domainIncomeForState(library[domain], slot, presence[domain], now, sync.cacheCoreLevel);
+    incomes[domain] = domainIncomeForState(library[domain], slot, presence[domain], now, sync.cacheCoreLevel, premiumMultiplier);
     return incomes;
   }, {});
 }
 
 async function getSnapshot() {
   const { sync, local } = await settleAndSave();
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  await refreshPremiumStatus(local);
+  await saveState(sync, local);
+  const activeTab = await activeTabInEligibleWindow();
   const currentDomain = normalizeDomainFromUrl(activeTab?.url);
   const now = Date.now();
+  const balanceGainSinceLastPopup = local.lastPopupBalance ? sciSub(sync.balance, local.lastPopupBalance) : SCI_ZERO;
   const welcomeBack = updateWelcomeBack(sync, local, now);
   await saveState(sync, local);
-  const slotIncomes = currentSlotIncomes(sync, local.domainLibrary, local.presence, now);
+  const cloudSaveMeta = await getCloudSaveMeta();
+  const premiumMultiplier = supporterCoreMultiplier(local);
+  const slotIncomes = currentSlotIncomes(sync, local.domainLibrary, local.presence, now, premiumMultiplier);
   return {
     sync,
     local,
@@ -392,9 +990,27 @@ async function getSnapshot() {
       nextMultiplier: cacheCoreMultiplier(sync.cacheCoreLevel + 1),
       nextCost: cacheCoreCost(sync.cacheCoreLevel)
     },
+    mastery: {
+      unlocked: Number(sync.prestigeCount || 0) >= 1,
+      rankCap: MASTERY_RANK_CAP,
+      incomePerRank: MASTERY_INCOME_PER_RANK,
+      vaultCapPerRank: MASTERY_VAULT_CAP_PER_RANK
+    },
+    premium: {
+      supporterCorePaid: Boolean(local.premiumStatus?.supporterCorePaid),
+      email: local.premiumStatus?.email || null,
+      checkedAt: Number(local.premiumStatus?.checkedAt || 0),
+      error: local.premiumStatus?.error || null,
+      multiplier: premiumMultiplier,
+      productName: "Supporter Core",
+      price: "$1.99",
+      planNickname: SUPPORTER_CORE_PLAN
+    },
     now,
     slotIncomes,
     welcomeBack,
+    balanceGainSinceLastPopup,
+    cloudSaveMeta,
     incomePerSecond: Object.values(slotIncomes).reduce((sum, value) => sum + value, 0),
     nextSlotCost: slotUnlockCost(sync.unlockedSlots + 1),
     today: TODAY(),
@@ -407,31 +1023,49 @@ async function getSnapshot() {
 }
 
 async function collectWelcomeBack() {
-  const { sync, local } = await getState();
-  const award = local.pendingWelcomeBack;
-  local.pendingWelcomeBack = null;
-  local.lastPopupSeenAt = Date.now();
-  local.lastPopupBalance = sync.balance;
-  await saveState(sync, local);
-  return { ok: true, award };
+  if (CLAIM_LOCKS.has("welcomeBack")) return { ok: false, error: "Collection is already in progress." };
+  CLAIM_LOCKS.add("welcomeBack");
+  try {
+    const { sync, local } = await getState();
+    const award = local.pendingWelcomeBack;
+    local.pendingWelcomeBack = null;
+    local.lastPopupSeenAt = Date.now();
+    local.lastPopupBalance = sync.balance;
+    await saveState(sync, local);
+    return { ok: true, award };
+  } finally {
+    CLAIM_LOCKS.delete("welcomeBack");
+  }
+}
+
+function upgradeBulkCost(def, level, quantity) {
+  let total = 0;
+  for (let offset = 0; offset < quantity; offset += 1) {
+    const nextLevel = level + offset;
+    if (def.maxLevel !== null && nextLevel >= def.maxLevel) break;
+    total += upgradeCost(def, nextLevel);
+  }
+  return total;
 }
 
 function buyUpgrade(sync, local, domain, upgradeId, mode) {
   const def = UPGRADE_DEFS.find((upgrade) => upgrade.id === upgradeId);
   const entry = getDomainEntry(local, domain);
   if (!def || !entry) return { ok: false, error: "Upgrade unavailable." };
+  const target = mode === "10" ? 10 : 1;
+  const startLevel = getUpgradeLevel(entry, upgradeId);
+  if (def.maxLevel !== null && startLevel >= def.maxLevel) return { ok: false, error: "Upgrade is maxed." };
+  const totalCost = upgradeBulkCost(def, startLevel, target);
+  if (sciCompare(sync.balance, totalCost) < 0) return { ok: false, error: "Not enough cash." };
+  sync.balance = sciSub(sync.balance, totalCost);
   let bought = 0;
-  const target = mode === "10" ? 10 : mode === "max" ? 9999 : 1;
   while (bought < target) {
     const level = getUpgradeLevel(entry, upgradeId);
     if (def.maxLevel !== null && level >= def.maxLevel) break;
-    const cost = upgradeCost(def, level);
-    if (sciCompare(sync.balance, cost) < 0) break;
-    sync.balance = sciSub(sync.balance, cost);
     entry.upgrades[upgradeId] = level + 1;
     bought += 1;
   }
-  return bought > 0 ? { ok: true, bought } : { ok: false, error: "Not enough cash." };
+  return { ok: true, bought };
 }
 
 async function addCurrentSite(slotId) {
@@ -441,14 +1075,31 @@ async function addCurrentSite(slotId) {
 }
 
 async function activeTabDomain() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await activeTabInEligibleWindow();
   return normalizeDomainFromUrl(tab?.url);
+}
+
+async function isForegroundTab(tabId) {
+  try {
+    const [tab, win] = await Promise.all([
+      chrome.tabs.get(tabId),
+      getEligibleFocusedWindow()
+    ]);
+    if (!tab?.active || !win) return false;
+    if (tab.incognito) return false;
+    return Number(tab.windowId) === Number(win.id);
+  } catch {
+    return false;
+  }
 }
 
 async function assignDomainToSlot(slotId, domain, options = {}) {
   domain = normalizeDomainInput(domain);
   if (!domain) return { ok: false, error: "Enter a valid website domain." };
   const { sync, local } = await settleAndSave();
+  if (!canAddDomain(local, domain)) {
+    return { ok: false, error: `Domain library full (${DOMAIN_LIBRARY_LIMIT}/${DOMAIN_LIBRARY_LIMIT}). Delete a domain before adding another.` };
+  }
   const slot = sync.slots.find((item) => item.id === slotId);
   if (!slot) return { ok: false, error: "Slot unavailable." };
   const existingSlot = sync.slots.find((item) => item.assignedDomain === domain);
@@ -472,10 +1123,6 @@ async function assignDomainToSlot(slotId, domain, options = {}) {
   slot.assignedDomain = domain;
   entry.isSlotted = true;
   entry.slotId = slot.id;
-  if (options.fromCurrentSite) {
-    const activeDomain = normalizeDomainInput(options.currentDomain) || await activeTabDomain();
-    if (activeDomain === domain) recordFocusedVisit(entry);
-  }
   await rebuildPresence(sync, local);
   await saveState(sync, local);
   return { ok: true };
@@ -511,18 +1158,48 @@ async function removeDomain(slotId) {
   return { ok: true };
 }
 
-async function claimRevisit(domain) {
+async function deleteDomain(domain) {
+  domain = normalizeDomainInput(domain);
+  if (!domain) return { ok: false, error: "Invalid domain." };
   const { sync, local } = await settleAndSave();
-  const slot = sync.slots.find((item) => item.assignedDomain === domain);
-  if (!slot) return { ok: false, error: "Domain is not slotted." };
-  const entry = getDomainEntry(local, domain);
-  const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel);
-  if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
-  entry.dailyBonusClaimedDate = TODAY();
-  entry.vaultAmount = { ...SCI_ZERO };
-  addEarnings(sync, entry, payout.total);
+  if (!local.domainLibrary[domain]) return { ok: false, error: "Domain not found." };
+  for (const slot of sync.slots) {
+    if (slot.assignedDomain === domain) slot.assignedDomain = null;
+  }
+  delete local.domainLibrary[domain];
+  delete local.presence[domain];
+  delete local.lastNavigationBonusAt[domain];
+  delete local.lastWakeBonusAt[domain];
+  local.notificationState = normalizeNotificationState(local.notificationState);
+  local.notificationState.vaultFullNotified = false;
   await saveState(sync, local);
-  return { ok: true, payout };
+  await updateBadge(sync);
+  return { ok: true };
+}
+
+async function claimRevisit(domain) {
+  const lockKey = `claim:${domain}`;
+  if (CLAIM_LOCKS.has(lockKey)) return { ok: false, error: "Claim is already in progress." };
+  CLAIM_LOCKS.add(lockKey);
+  try {
+    const { sync, local } = await settleAndSave();
+    const slot = sync.slots.find((item) => item.assignedDomain === domain);
+    if (!slot) return { ok: false, error: "Domain is not slotted." };
+    const entry = getDomainEntry(local, domain);
+    const payout = computeVaultPayout(entry, slot, Date.now(), sync.cacheCoreLevel, supporterCoreMultiplier(local));
+    if (payout.total <= 0) return { ok: false, error: "Nothing ready to claim yet.", payout };
+    entry.vaultAmount = { ...SCI_ZERO };
+    local.notificationState = normalizeNotificationState(local.notificationState);
+    local.notificationState.vaultFullNotified = false;
+    recordEarnings(sync, local, entry, payout.total, {
+      source: "vault",
+      welcomeBackEligible: false
+    });
+    await saveState(sync, local);
+    return { ok: true, payout };
+  } finally {
+    CLAIM_LOCKS.delete(lockKey);
+  }
 }
 
 async function unlockNextSlot() {
@@ -543,8 +1220,8 @@ async function upgradeSlotTier(slotId) {
   if (!slot || slot.tier >= 5) return { ok: false, error: "Slot tier is maxed." };
   const next = SLOT_TIERS.find((tier) => tier.tier === slot.tier + 1);
   const cost = slotTierCost(slot.id, next.tier);
-  if (sync.cachePoints < cost) return { ok: false, error: "Not enough CP." };
-  sync.cachePoints -= cost;
+  if (sync.cacheCredits < cost) return { ok: false, error: "Not enough CC." };
+  sync.cacheCredits -= cost;
   slot.tier += 1;
   await saveState(sync, local);
   return { ok: true };
@@ -553,8 +1230,8 @@ async function upgradeSlotTier(slotId) {
 async function upgradeCacheCore() {
   const { sync, local } = await settleAndSave();
   const cost = cacheCoreCost(sync.cacheCoreLevel);
-  if (sync.cachePoints < cost) return { ok: false, error: "Not enough CP." };
-  sync.cachePoints -= cost;
+  if (sync.cacheCredits < cost) return { ok: false, error: "Not enough CC." };
+  sync.cacheCredits -= cost;
   sync.cacheCoreLevel += 1;
   await saveState(sync, local);
   return {
@@ -565,12 +1242,48 @@ async function upgradeCacheCore() {
   };
 }
 
+async function upgradeDomainMastery(domain) {
+  const normalizedDomain = normalizeDomainInput(domain);
+  if (!normalizedDomain) return { ok: false, error: "Choose a valid domain." };
+  const { sync, local } = await settleAndSave();
+  if (Number(sync.prestigeCount || 0) < 1) return { ok: false, error: "Domain Mastery unlocks after your first Clear Cache." };
+  const entry = local.domainLibrary[normalizedDomain];
+  if (!entry) return { ok: false, error: "Domain not found." };
+  entry.masteryLifetimeEarned = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned || SCI_ZERO);
+  entry.masteryRank = masteryRank(entry);
+  if (entry.masteryRank >= MASTERY_RANK_CAP) return { ok: false, error: "Domain Mastery is maxed." };
+  const nextRank = entry.masteryRank + 1;
+  const lifetimeRequirement = masteryLifetimeRequirement(nextRank);
+  if (sciCompare(entry.masteryLifetimeEarned, lifetimeRequirement) < 0) {
+    return { ok: false, error: "Domain lifetime is too low for the next Mastery rank." };
+  }
+  const cost = masteryCcCost(nextRank);
+  if (sync.cacheCredits < cost) return { ok: false, error: "Not enough CC." };
+  sync.cacheCredits -= cost;
+  entry.masteryRank = nextRank;
+  await saveState(sync, local);
+  return {
+    ok: true,
+    domain: normalizedDomain,
+    rank: entry.masteryRank,
+    cost,
+    incomeMultiplier: masteryIncomeMultiplier(entry),
+    vaultCapMultiplier: masteryVaultCapMultiplier(entry)
+  };
+}
+
 async function clearCachePrestige() {
   const { sync, local } = await settleAndSave();
+  if (Number(sync.prestigeCount || 0) < 1 && sciCompare(sync.totalLifetimeEarned, FIRST_PRESTIGE_LIFETIME_REQUIREMENT) < 0) {
+    return {
+      ok: false,
+      error: `First Clear Cache unlocks at $${FIRST_PRESTIGE_LIFETIME_REQUIREMENT.toLocaleString()} lifetime earnings.`
+    };
+  }
   const cpTotal = prestigeTotalFromLifetime(sync.totalLifetimeEarned);
-  const award = Math.max(0, cpTotal - sync.cpAlreadyClaimedFromLifetime);
-  sync.cachePoints += award;
-  sync.cpAlreadyClaimedFromLifetime = cpTotal;
+  const award = Math.max(0, cpTotal - sync.ccAlreadyClaimedFromLifetime);
+  sync.cacheCredits += award;
+  sync.ccAlreadyClaimedFromLifetime = cpTotal;
   sync.balance = { ...SCI_ZERO };
   sync.prestigeCount += 1;
   for (const domain of Object.keys(local.domainLibrary)) {
@@ -593,8 +1306,10 @@ async function devAddCash(amount = 1000) {
   const { sync, local } = await settleAndSave();
   const value = Number(amount);
   if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid cash amount." };
-  sync.balance = sciAdd(sync.balance, value);
-  sync.totalLifetimeEarned = sciAdd(sync.totalLifetimeEarned, value);
+  recordEarnings(sync, local, null, value, {
+    source: "bonus",
+    welcomeBackEligible: false
+  });
   await saveState(sync, local);
   return { ok: true, amount: value };
 }
@@ -602,8 +1317,8 @@ async function devAddCash(amount = 1000) {
 async function devAddCachePoints(amount = 10) {
   const { sync, local } = await settleAndSave();
   const value = Number(amount);
-  if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid CP amount." };
-  sync.cachePoints += value;
+  if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid CC amount." };
+  sync.cacheCredits += value;
   await saveState(sync, local);
   return { ok: true, amount: value };
 }
@@ -611,50 +1326,168 @@ async function devAddCachePoints(amount = 10) {
 async function devResetCashAndCachePoints() {
   const { sync, local } = await settleAndSave();
   sync.balance = { ...SCI_ZERO };
-  sync.cachePoints = 0;
+  sync.cacheCredits = 0;
   await saveState(sync, local);
   return { ok: true };
+}
+
+async function devResetLifetime() {
+  const { sync, local } = await settleAndSave();
+  sync.totalLifetimeEarned = { ...SCI_ZERO };
+  sync.ccAlreadyClaimedFromLifetime = 0;
+  for (const entry of Object.values(local.domainLibrary)) {
+    entry.lifetimeEarned = { ...SCI_ZERO };
+    entry.masteryLifetimeEarned = { ...SCI_ZERO };
+    entry.masteryRank = 0;
+  }
+  await saveState(sync, local);
+  return { ok: true };
+}
+
+async function openPremiumPayment() {
+  const currentExtPay = makeExtPay();
+  if (!currentExtPay?.openPaymentPage) return { ok: false, error: "ExtensionPay is not available." };
+  await currentExtPay.openPaymentPage(SUPPORTER_CORE_PLAN);
+  return { ok: true };
+}
+
+async function openPremiumLogin() {
+  const currentExtPay = makeExtPay();
+  if (!currentExtPay?.openLoginPage) return { ok: false, error: "ExtensionPay is not available." };
+  await currentExtPay.openLoginPage();
+  return { ok: true };
+}
+
+async function forceRefreshPremiumStatus() {
+  const { sync, local } = await getState();
+  const status = await refreshPremiumStatus(local, { force: true });
+  await saveState(sync, local);
+  return {
+    ok: true,
+    paid: Boolean(status.supporterCorePaid),
+    error: status.error || null
+  };
+}
+
+async function updateNotificationSettings(patch = {}) {
+  const { sync, local } = await getState();
+  const cleaned = Object.fromEntries(
+    Object.entries(patch || {})
+      .filter(([key]) => key in DEFAULT_NOTIFICATION_SETTINGS)
+      .map(([key, value]) => [key, Boolean(value)])
+  );
+  if ("enabled" in cleaned) {
+    cleaned.vaultFull = cleaned.enabled;
+    cleaned.bigPayout = cleaned.enabled;
+    cleaned.streakRisk = cleaned.enabled;
+  }
+  sync.notificationSettings = {
+    ...normalizeNotificationSettings(sync.notificationSettings, sync.onboardingComplete),
+    ...cleaned
+  };
+  sync.notificationSettings = normalizeNotificationSettings(sync.notificationSettings, sync.onboardingComplete);
+  await Promise.all([
+    saveState(sync, local),
+    chrome.storage.sync.set({ notificationSettings: sync.notificationSettings })
+  ]);
+  return { ok: true, notificationSettings: sync.notificationSettings };
 }
 
 async function navigationBonus(details) {
   if (details.frameId !== 0) return;
   const domain = normalizeDomainFromUrl(details.url);
   if (!domain) return;
-  const { sync, local } = await settleAndSave();
+  const isForeground = await isForegroundTab(details.tabId);
+  const eligibleWindow = await getEligibleFocusedWindow();
+  const { sync, local } = await getState();
+  settleAccrual(sync, local, Date.now(), eligibleWindow);
   const slot = sync.slots.find((item) => item.assignedDomain === domain);
-  if (!slot) return;
-  const entry = getDomainEntry(local, domain);
-  const level = getUpgradeLevel(entry, "navigationBonus");
-  if (level <= 0) {
+  if (!slot) {
+    await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
+    await updateBadge(sync);
     return;
   }
   const now = Date.now();
-  const last = local.lastNavigationBonusAt[domain] || 0;
-  if (now - last < 15000) {
+  if (!isForeground) {
+    await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
+    await updateBadge(sync);
     return;
   }
-  const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel);
+  if (isForeground) recordForegroundDomainEvent(sync, local, domain, slot, now);
+  const entry = getDomainEntry(local, domain);
+  const level = getUpgradeLevel(entry, "navigationBonus");
+  if (level <= 0) {
+    await rebuildPresence(sync, local, eligibleWindow);
+    await saveState(sync, local);
+    await updateBadge(sync);
+    return;
+  }
+  const last = local.lastNavigationBonusAt[domain] || 0;
+  if (now - last < EVENT_BONUS_COOLDOWN_MS) {
+    await rebuildPresence(sync, local, eligibleWindow);
+    await saveState(sync, local);
+    await updateBadge(sync);
+    return;
+  }
+  const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel, supporterCoreMultiplier(local));
   local.lastNavigationBonusAt[domain] = now;
-  addEarnings(sync, entry, amount);
+  recordEarnings(sync, local, entry, amount, { source: "navigation", now });
+  await rebuildPresence(sync, local, eligibleWindow);
   await saveState(sync, local);
+  await updateBadge(sync);
+}
+
+let pendingSettleTimer = null;
+
+function scheduleSettle(delay = 0) {
+  if (pendingSettleTimer) clearTimeout(pendingSettleTimer);
+  pendingSettleTimer = setTimeout(() => {
+    pendingSettleTimer = null;
+    settleAndSave();
+  }, delay);
+}
+
+async function ensureAlarms() {
+  await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
+  await chrome.alarms.create(NOTIFICATION_ALARM_NAME, { periodInMinutes: 60 });
+}
+
+async function openTycoonFromNotification(notificationId) {
+  if (!Object.values(NOTIFICATION_IDS).includes(notificationId)) return;
+  await chrome.notifications.clear(notificationId);
+  if (chrome.action?.openPopup) {
+    try {
+      await chrome.action.openPopup();
+      return;
+    } catch (_error) {}
+  }
+  await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
-  await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
+  await ensureAlarms();
   await settleAndSave();
 });
 
-chrome.runtime.onStartup.addListener(() => settleAndSave());
+chrome.runtime.onStartup.addListener(async () => {
+  await ensureAlarms();
+  await settleAndSave();
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) settleAndSave();
+  if (alarm.name === NOTIFICATION_ALARM_NAME) maybeSendEngagementNotifications();
 });
+chrome.notifications.onClicked.addListener(openTycoonFromNotification);
 chrome.tabs.onActivated.addListener(() => settleAndSave());
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.status === "complete") settleAndSave();
 });
 chrome.tabs.onRemoved.addListener(() => settleAndSave());
+chrome.windows.onFocusChanged.addListener(() => settleAndSave());
+chrome.windows.onRemoved.addListener(() => settleAndSave());
+chrome.windows.onBoundsChanged.addListener(() => scheduleSettle(250));
 chrome.webNavigation.onCommitted.addListener(navigationBonus);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -668,6 +1501,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       if (message.type === "swapSlots") return swapSlots(message.fromSlotId, message.toSlotId);
       if (message.type === "removeDomain") return removeDomain(message.slotId);
+      if (message.type === "deleteDomain") return deleteDomain(message.domain);
       if (message.type === "buyUpgrade") {
         const { sync, local } = await settleAndSave();
         const result = buyUpgrade(sync, local, message.domain, message.upgradeId, message.mode);
@@ -679,20 +1513,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "unlockSlot") return unlockNextSlot();
       if (message.type === "upgradeSlotTier") return upgradeSlotTier(message.slotId);
       if (message.type === "upgradeCacheCore") return upgradeCacheCore();
+      if (message.type === "upgradeDomainMastery") return upgradeDomainMastery(message.domain);
       if (message.type === "prestige") return clearCachePrestige();
       if (message.type === "devAddCash") return devAddCash(message.amount);
       if (message.type === "devAddCachePoints") return devAddCachePoints(message.amount);
       if (message.type === "devResetCashAndCachePoints") return devResetCashAndCachePoints();
+      if (message.type === "devResetLifetime") return devResetLifetime();
+      if (message.type === "openPremiumPayment") return openPremiumPayment();
+      if (message.type === "openPremiumLogin") return openPremiumLogin();
+      if (message.type === "refreshPremiumStatus") return forceRefreshPremiumStatus();
+      if (message.type === "updateNotificationSettings") return updateNotificationSettings(message.settings);
+      if (message.type === "syncCloudSave") return syncCloudSave();
+      if (message.type === "loadCloudSave") return loadCloudSave();
       if (message.type === "completeOnboarding") {
         const { sync, local } = await getState();
-        sync.onboardingComplete = true;
-        await saveState(sync, local);
+        const alreadyClaimed = Boolean(sync.onboardingStarterCashClaimed);
+        await saveOnboardingState(sync, local, true, "complete", { grantStarterCash: true });
+        return { ok: true, starterCash: alreadyClaimed ? 0 : ONBOARDING_STARTER_CASH };
+      }
+      if (message.type === "resetOnboarding") {
+        const { sync, local } = await getState();
+        await saveOnboardingState(sync, local, false, "intro", { resetStarterCash: true });
+        return { ok: true };
+      }
+      if (message.type === "setOnboardingStep") {
+        const { sync, local } = await getState();
+        if (sync.onboardingComplete) return { ok: true, ignored: true };
+        await saveOnboardingState(sync, local, false, message.step || "intro");
         return { ok: true };
       }
       return { ok: false, error: "Unknown action." };
     } catch (error) {
       return { ok: false, error: error.message };
     }
-  })().then(sendResponse);
+  })()
+    .then((response) => sendResponse(response || { ok: true }))
+    .catch((error) => sendResponse({ ok: false, error: error?.message || "Action failed." }));
   return true;
 });

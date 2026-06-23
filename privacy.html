@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy Policy | Browser Tycoon</title>
+    <meta
+      name="description"
+      content="Privacy Policy for Browser Tycoon, a Chrome extension idle game."
+    >
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #10131a;
+        --panel: #171b24;
+        --text: #f4f0e8;
+        --muted: #b6bcc8;
+        --gold: #f0b84f;
+        --mint: #66d6a6;
+        --line: rgba(255, 255, 255, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background:
+          linear-gradient(135deg, rgba(102, 214, 166, 0.12), transparent 30%),
+          linear-gradient(220deg, rgba(240, 184, 79, 0.16), transparent 36%),
+          var(--bg);
+        color: var(--text);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .nav,
+      main,
+      footer {
+        width: min(920px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 22px 0;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-decoration: none;
+      }
+
+      .brand img {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .nav-links a {
+        text-decoration: none;
+      }
+
+      main {
+        padding: 54px 0 76px;
+      }
+
+      .eyebrow {
+        width: fit-content;
+        margin: 0 0 18px;
+        padding: 7px 10px;
+        border: 1px solid rgba(102, 214, 166, 0.42);
+        border-radius: 8px;
+        color: var(--mint);
+        background: rgba(102, 214, 166, 0.08);
+        font-size: 0.78rem;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2.6rem, 7vw, 5.4rem);
+        line-height: 0.95;
+        letter-spacing: 0;
+      }
+
+      .lede {
+        max-width: 760px;
+        margin: 22px 0 0;
+        color: var(--muted);
+        font-size: 1.12rem;
+        line-height: 1.65;
+      }
+
+      .policy {
+        margin-top: 42px;
+        padding: 30px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      h2 {
+        margin: 34px 0 10px;
+        font-size: 1.45rem;
+        letter-spacing: 0;
+      }
+
+      h2:first-child {
+        margin-top: 0;
+      }
+
+      p,
+      li {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      ul {
+        margin: 10px 0 0;
+        padding-left: 22px;
+      }
+
+      strong {
+        color: var(--text);
+      }
+
+      footer {
+        padding: 26px 0 44px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      @media (max-width: 640px) {
+        .nav {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .nav,
+        main,
+        footer {
+          width: min(100% - 28px, 920px);
+        }
+
+        .nav-links {
+          flex-wrap: wrap;
+        }
+
+        .policy {
+          padding: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="nav" aria-label="Primary navigation">
+      <a class="brand" href="index.html">
+        <img src="generated-icons/browser-tycoon-logo-v2.png" alt="">
+        <span>Browser Tycoon</span>
+      </a>
+      <nav class="nav-links" aria-label="Page navigation">
+        <a href="index.html">Home</a>
+        <a href="privacy.html">Privacy</a>
+      </nav>
+    </header>
+
+    <main>
+      <p class="eyebrow">Privacy Policy</p>
+      <h1>Browser Tycoon Privacy Policy</h1>
+      <p class="lede">
+        Browser Tycoon is a Chrome extension idle game that turns selected browsing activity into game progress.
+        This policy explains what the extension uses, what it stores, and what leaves your device.
+      </p>
+
+      <section class="policy">
+        <h2>Effective Date</h2>
+        <p>June 12, 2026</p>
+
+        <h2>Information Browser Tycoon Uses</h2>
+        <p>
+          Browser Tycoon observes browser tab and navigation activity so it can run the game. This includes the domain
+          names of pages you visit, whether an assigned domain is active, in the background, or inactive, and timing
+          information used to calculate game income, streaks, vault progress, and upgrade effects.
+        </p>
+        <p>
+          Browser Tycoon is designed around domains, not full page contents. The extension does not read page text,
+          form fields, passwords, messages, files, or other page content.
+        </p>
+
+        <h2>Information Stored By The Extension</h2>
+        <p>The extension stores game progress such as:</p>
+        <ul>
+          <li>Assigned domain slots and domain library entries.</li>
+          <li>Currency, Cache Credits, lifetime earnings, upgrades, vault amounts, streaks, and tutorial progress.</li>
+          <li>Notification preferences and notification state.</li>
+          <li>Supporter Core payment status returned by ExtensionPay.</li>
+        </ul>
+        <p>
+          Gameplay data is primarily stored locally in Chrome extension storage on your device.
+        </p>
+
+        <h2>Chrome Sync Save</h2>
+        <p>
+          Browser Tycoon includes manual cloud save controls. The extension does not continuously sync your full save.
+          When you choose to sync your save, Browser Tycoon writes a copy of your game save to Chrome sync storage so
+          you can load it on another Chrome profile or device. Loading a synced save replaces the local save on that
+          device.
+        </p>
+        <p>
+          Notification settings may also be stored in Chrome sync storage so your notification preferences can follow
+          your Chrome profile.
+        </p>
+
+        <h2>Notifications</h2>
+        <p>
+          Browser Tycoon can send optional game notifications, such as all vaults being full, a large payout being
+          available, or a streak being at risk. Notification categories can be changed in the extension settings.
+        </p>
+
+        <h2>Payments</h2>
+        <p>
+          Browser Tycoon may offer optional Supporter Core features through ExtensionPay. Payment, account, and checkout
+          information is handled by ExtensionPay and its payment processors. Browser Tycoon stores whether Supporter
+          Core is active so the game can apply the correct in-game benefit.
+        </p>
+
+        <h2>Favicons And Remote Assets</h2>
+        <p>
+          Browser Tycoon uses Chrome's built-in extension favicon feature to display website icons. It does not send
+          your saved domains to an external favicon service. Extension UI assets, including fonts used by the popup, are
+          bundled with the extension.
+        </p>
+
+        <h2>Data Sharing And Sale</h2>
+        <p>
+          Browser Tycoon does not sell your data. Browser Tycoon does not use your browsing activity for advertising.
+          Data may be processed by Chrome storage features when you use Chrome sync save, and by ExtensionPay when you
+          use optional payment or restore features.
+        </p>
+
+        <h2>Data Retention And Deletion</h2>
+        <p>
+          Browser Tycoon stores game data until you delete it, reset progress through the extension, remove the
+          extension, or clear the extension's site/storage data in Chrome. Synced saves can be overwritten by syncing a
+          new save.
+        </p>
+
+        <h2>Children's Privacy</h2>
+        <p>
+          Browser Tycoon is not directed to children under 13. The extension does not knowingly collect personal
+          information from children.
+        </p>
+
+        <h2>Changes To This Policy</h2>
+        <p>
+          This policy may be updated as Browser Tycoon changes. Updates will be posted on this page with a new effective
+          date.
+        </p>
+
+        <h2>Contact</h2>
+        <p>
+          For privacy questions, use the support contact provided on the Chrome Web Store listing or the Browser Tycoon
+          GitHub repository.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      Browser Tycoon is a Chrome extension idle game. <a href="index.html">Back to home</a>
+    </footer>
+  </body>
+</html>

@@ -1,35 +1,55 @@
 (function (global) {
   const BASE_RATE = 0.25;
   const VAULT_RATE = BASE_RATE * 0.02;
-  const TRAFFIC_ENGINE_MULTIPLIER = 1.18;
+  const TRAFFIC_ENGINE_MULTIPLIER = 1.2;
   const PRESTIGE_DIVISOR = 100000;
-  const SLOT_PRESTIGE_COST_SCALE = 1.5;
-  const CACHE_CORE_MULTIPLIER = 1.5;
+  const FIRST_PRESTIGE_LIFETIME_REQUIREMENT = 10000000;
+  const SLOT_PRESTIGE_COST_SCALE = 5.0;
+  const CACHE_CORE_MULTIPLIER = 1.45;
   const CACHE_CORE_BASE_COST = 5;
-  const CACHE_CORE_COST_GROWTH = 1.5;
-  const COLD_STORAGE_MULTIPLIER = 1.32;
+  const CACHE_CORE_COST_GROWTH = 1.85;
+  const SUPPORTER_CORE_MULTIPLIER = 1.5;
+  const VAULT_LINEAR_MULTIPLIER = 0.12;
+  const VAULT_POLY_MULTIPLIER = 0.005;
+  const VAULT_POLY_EXPONENT = 3.0;
+  const VAULT_TRAFFIC_EXPONENT = 0.9;
+  const BACKGROUND_TRAFFIC_EXPONENT = 0.9;
+  const DAILY_BASE_MINUTES = 60;
+  const DAILY_STREAK_BASE_MULTIPLIER = 0.04;
+  const DAILY_STREAK_BOOT_MULTIPLIER = 0.2;
+  const NAVIGATION_EVENT_SECONDS = 18;
+  const WAKE_BURST_SECONDS = 105;
+  const MASTERY_RANK_CAP = 50;
+  const MASTERY_INCOME_PER_RANK = 0.02;
+  const MASTERY_VAULT_CAP_PER_RANK = 0.02;
+  const MASTERY_LIFETIME_BASE = 1000000;
+  const MASTERY_LIFETIME_RANK_EXPONENT = 3;
+  const MASTERY_LIFETIME_GROWTH = 1.6;
+  const MASTERY_CC_BASE_COST = 2;
+  const MASTERY_CC_RANK_EXPONENT = 1.65;
+  const MASTERY_CC_GROWTH = 1.24;
   const SCI_ZERO = Object.freeze({ m: 0, e: 0 });
 
   const UPGRADE_DEFS = Object.freeze([
-    { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 35, growth: 1.45, maxLevel: null },
-    { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 25, growth: 1.4, maxLevel: null },
-    { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 60, growth: 1.45, maxLevel: null },
-    { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 50, growth: 1.55, maxLevel: null },
-    { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 60, growth: 1.55, maxLevel: null },
-    { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 25, growth: 1.4, maxLevel: null },
-    { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 50, growth: 1.4, maxLevel: null },
-    { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 80, growth: 1.55, maxLevel: null },
-    { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 100, growth: 1.55, maxLevel: null },
-    { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 125, growth: 1.45, maxLevel: null }
+    { id: "trafficEngine", name: "Traffic Engine", category: "active", baseCost: 25, growth: 1.35, maxLevel: null, icon: 26 },
+    { id: "tabMultiplier", name: "Tab Multiplier", category: "active", baseCost: 35, growth: 1.5, maxLevel: null, icon: 13 },
+    { id: "focusBonus", name: "Focus Bonus", category: "active", baseCost: 25, growth: 1.4, maxLevel: null, icon: 16 },
+    { id: "navigationBonus", name: "Navigation Bonus", category: "active", baseCost: 100, growth: 1.65, maxLevel: null, icon: 37 },
+    { id: "coldStorage", name: "Cold Storage", category: "vault", baseCost: 100, growth: 1.6, maxLevel: null, icon: 22 },
+    { id: "storageDuration", name: "Vault Pump", category: "vault", baseCost: 100, growth: 1.6, maxLevel: null, icon: 5 },
+    { id: "dailyBoot", name: "Daily Boot", category: "vault", baseCost: 50, growth: 1.35, maxLevel: null, icon: 33 },
+    { id: "backgroundHum", name: "Background Hum", category: "background", baseCost: 150, growth: 1.8, maxLevel: null, icon: 30 },
+    { id: "idleDepth", name: "Idle Depth", category: "background", baseCost: 150, growth: 1.8, maxLevel: null, icon: 9 },
+    { id: "wakeBonus", name: "Wake Bonus", category: "background", baseCost: 75, growth: 1.4, maxLevel: null, icon: 10 }
   ]);
 
   const SLOT_TIERS = Object.freeze([
     { tier: 0, cpCost: 0, bonus: 1 },
     { tier: 1, cpCost: 1, bonus: 1.2 },
-    { tier: 2, cpCost: 3, bonus: 1.5 },
-    { tier: 3, cpCost: 8, bonus: 2 },
-    { tier: 4, cpCost: 20, bonus: 2.75 },
-    { tier: 5, cpCost: 50, bonus: 4 }
+    { tier: 2, cpCost: 4, bonus: 1.5 },
+    { tier: 3, cpCost: 12, bonus: 2 },
+    { tier: 4, cpCost: 34, bonus: 2.75 },
+    { tier: 5, cpCost: 100, bonus: 4 }
   ]);
 
   const emptyUpgrades = () => Object.fromEntries(UPGRADE_DEFS.map((upgrade) => [upgrade.id, 0]));
@@ -130,6 +150,34 @@
     return Number(entry?.upgrades?.[id] || 0);
   }
 
+  function masteryRank(entry) {
+    return Math.max(0, Math.min(MASTERY_RANK_CAP, Math.floor(Number(entry?.masteryRank || 0))));
+  }
+
+  function masteryIncomeMultiplier(entryOrRank) {
+    const rank = typeof entryOrRank === "number" ? entryOrRank : masteryRank(entryOrRank);
+    return 1 + Math.max(0, Math.min(MASTERY_RANK_CAP, rank)) * MASTERY_INCOME_PER_RANK;
+  }
+
+  function masteryVaultCapMultiplier(entryOrRank) {
+    const rank = typeof entryOrRank === "number" ? entryOrRank : masteryRank(entryOrRank);
+    return 1 + Math.max(0, Math.min(MASTERY_RANK_CAP, rank)) * MASTERY_VAULT_CAP_PER_RANK;
+  }
+
+  function masteryLifetimeRequirement(rank) {
+    const targetRank = Math.max(1, Math.min(MASTERY_RANK_CAP, Math.floor(Number(rank || 1))));
+    return MASTERY_LIFETIME_BASE
+      * Math.pow(targetRank, MASTERY_LIFETIME_RANK_EXPONENT)
+      * Math.pow(MASTERY_LIFETIME_GROWTH, targetRank - 1);
+  }
+
+  function masteryCcCost(rank) {
+    const targetRank = Math.max(1, Math.min(MASTERY_RANK_CAP, Math.floor(Number(rank || 1))));
+    return Math.ceil(MASTERY_CC_BASE_COST
+      * Math.pow(targetRank, MASTERY_CC_RANK_EXPONENT)
+      * Math.pow(MASTERY_CC_GROWTH, targetRank - 1));
+  }
+
   function upgradeCost(def, level) {
     return Math.ceil(def.baseCost * Math.pow(def.growth, level));
   }
@@ -154,8 +202,7 @@
 
   function slotUnlockCost(slotNumber) {
     if (slotNumber <= 3) return 0;
-    if (slotNumber === 4) return 500;
-    return floorToSignificantFigures(500 * Math.pow(5, Math.pow(slotNumber - 3.75, 1.35)));
+    return floorToSignificantFigures(1000 * Math.pow(100, Math.max(0, slotNumber - 4)));
   }
 
   function domainBaseRate(entry, cacheCoreLevel = 0) {
@@ -170,67 +217,92 @@
     return 1 + 0.35 * level + 0.01 * Math.pow(level, 1.2);
   }
 
+  function vaultUpgradeMultiplier(level) {
+    const upgradeLevel = Math.max(0, Number(level || 0));
+    return 1 + VAULT_LINEAR_MULTIPLIER * upgradeLevel + VAULT_POLY_MULTIPLIER * Math.pow(upgradeLevel, VAULT_POLY_EXPONENT);
+  }
+
   function vaultPumpMultiplier(level) {
-    return Math.pow(1.3, level);
+    return vaultUpgradeMultiplier(level);
+  }
+
+  function coldStorageMultiplier(level) {
+    return vaultUpgradeMultiplier(level);
+  }
+
+  function vaultTrafficScale(entry, cacheCoreLevel = 0) {
+    const coreMultiplier = cacheCoreMultiplier(cacheCoreLevel);
+    const trafficRatio = domainBaseRate(entry, cacheCoreLevel) / (BASE_RATE * coreMultiplier);
+    return Math.pow(trafficRatio, VAULT_TRAFFIC_EXPONENT);
+  }
+
+  function backgroundBaseRate(entry, cacheCoreLevel = 0) {
+    const coreMultiplier = cacheCoreMultiplier(cacheCoreLevel);
+    const trafficRatio = Math.pow(TRAFFIC_ENGINE_MULTIPLIER, getUpgradeLevel(entry, "trafficEngine"));
+    return BASE_RATE * coreMultiplier * Math.pow(trafficRatio, BACKGROUND_TRAFFIC_EXPONENT);
   }
 
   function dailyBootMultiplier(level) {
-    return 1 + 0.18 * Math.pow(level, 0.95);
+    return 1 + 0.18 * level;
   }
 
-  function vaultCap(entry, coldLevel = getUpgradeLevel(entry, "coldStorage"), cacheCoreLevel = 0) {
+  function dailyStreakMultiplier(streak, dailyBootLevel) {
+    const streakLevel = Math.min(Number(streak || 0), 14);
+    const bootAssist = 1 + DAILY_STREAK_BOOT_MULTIPLIER * Math.sqrt(Math.max(0, Number(dailyBootLevel || 0)));
+    return 1 + DAILY_STREAK_BASE_MULTIPLIER * streakLevel * bootAssist;
+  }
+
+  function vaultCap(entry, coldLevel = getUpgradeLevel(entry, "coldStorage"), cacheCoreLevel = 0, premiumMultiplier = 1) {
     const coreMultiplier = cacheCoreMultiplier(cacheCoreLevel);
-    const trafficScale = Math.sqrt(domainBaseRate(entry, cacheCoreLevel) / (BASE_RATE * coreMultiplier));
-    const baseCap = BASE_RATE * coreMultiplier * 60 * 25 * trafficScale;
-    return baseCap * Math.pow(COLD_STORAGE_MULTIPLIER, coldLevel);
+    const baseCap = BASE_RATE * coreMultiplier * 60 * 25 * vaultTrafficScale(entry, cacheCoreLevel) * premiumMultiplier;
+    return baseCap * coldStorageMultiplier(coldLevel) * masteryVaultCapMultiplier(entry);
   }
 
-  function vaultRate(entry, storageLevel = getUpgradeLevel(entry, "storageDuration"), cacheCoreLevel = 0) {
+  function vaultRate(entry, storageLevel = getUpgradeLevel(entry, "storageDuration"), cacheCoreLevel = 0, premiumMultiplier = 1) {
     const coreMultiplier = cacheCoreMultiplier(cacheCoreLevel);
-    const trafficScale = Math.sqrt(domainBaseRate(entry, cacheCoreLevel) / (BASE_RATE * coreMultiplier));
-    return VAULT_RATE * coreMultiplier * trafficScale * vaultPumpMultiplier(storageLevel);
+    return VAULT_RATE * coreMultiplier * vaultTrafficScale(entry, cacheCoreLevel) * vaultPumpMultiplier(storageLevel) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
-  function activeIncomePerSecond(entry, slot, cacheCoreLevel = 0) {
-    return domainBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * focusMultiplier(getUpgradeLevel(entry, "focusBonus")) * slotTierBonus(slot);
+  function activeIncomePerSecond(entry, slot, cacheCoreLevel = 0, premiumMultiplier = 1) {
+    return domainBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * focusMultiplier(getUpgradeLevel(entry, "focusBonus")) * slotTierBonus(slot) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
-  function backgroundIncomePerSecond(entry, slot, backgroundSince, now, cacheCoreLevel = 0) {
+  function backgroundIncomePerSecond(entry, slot, backgroundSince, now, cacheCoreLevel = 0, premiumMultiplier = 1) {
     const hum = 0.08 * getUpgradeLevel(entry, "backgroundHum");
     if (hum <= 0) return 0;
     const idleLevel = getUpgradeLevel(entry, "idleDepth");
     const idleSeconds = Math.max(0, (now - (backgroundSince || now)) / 1000);
     const idle = 1 + 0.1 * idleLevel * Math.min(idleSeconds / 300, 5);
-    return domainBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * hum * idle * slotTierBonus(slot);
+    return backgroundBaseRate(entry, cacheCoreLevel) * tabMultiplier(getUpgradeLevel(entry, "tabMultiplier")) * hum * idle * slotTierBonus(slot) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
-  function domainIncomeForState(entry, slot, presence, now, cacheCoreLevel = 0) {
+  function domainIncomeForState(entry, slot, presence, now, cacheCoreLevel = 0, premiumMultiplier = 1) {
     if (!presence) return 0;
-    if (presence.state === "active") return activeIncomePerSecond(entry, slot, cacheCoreLevel);
-    if (presence.state === "background") return backgroundIncomePerSecond(entry, slot, presence.backgroundSince, now, cacheCoreLevel);
+    if (presence.state === "active") return activeIncomePerSecond(entry, slot, cacheCoreLevel, premiumMultiplier);
+    if (presence.state === "background") return backgroundIncomePerSecond(entry, slot, presence.backgroundSince, now, cacheCoreLevel, premiumMultiplier);
     return 0;
   }
 
-  function dailyFirstOpenBonusForStreak(entry, slot, streak, cacheCoreLevel = 0) {
+  function dailyFirstOpenBonusForStreak(entry, slot, streak, cacheCoreLevel = 0, premiumMultiplier = 1) {
     const dailyBoot = getUpgradeLevel(entry, "dailyBoot");
     const slotStreak = slot?.streakBonusTier || 0;
-    const baseDaily = Math.max(20, domainBaseRate(entry, cacheCoreLevel) * 60 * 35);
-    const streakMultiplier = 1 + Math.min(Number(streak || 0), 14) * 0.04;
+    const baseDaily = Math.max(20, domainBaseRate(entry, cacheCoreLevel) * 60 * DAILY_BASE_MINUTES * masteryIncomeMultiplier(entry)) * premiumMultiplier;
+    const streakMultiplier = dailyStreakMultiplier(streak, dailyBoot);
     return baseDaily * dailyBootMultiplier(dailyBoot) * streakMultiplier * (1 + slotStreak * 0.15);
   }
 
-  function dailyFirstOpenBonus(entry, slot, cacheCoreLevel = 0) {
-    return dailyFirstOpenBonusForStreak(entry, slot, entry?.currentStreak || 0, cacheCoreLevel);
+  function dailyFirstOpenBonus(entry, slot, cacheCoreLevel = 0, premiumMultiplier = 1) {
+    return dailyFirstOpenBonusForStreak(entry, slot, entry?.currentStreak || 0, cacheCoreLevel, premiumMultiplier);
   }
 
-  function navigationPayoutForLevel(entry, slot, level, cacheCoreLevel = 0) {
+  function navigationPayoutForLevel(entry, slot, level, cacheCoreLevel = 0, premiumMultiplier = 1) {
     if (!entry || !slot || level <= 0) return 0;
-    return dailyFirstOpenBonus(entry, slot, cacheCoreLevel) * 0.13 * (1 + 0.18 * level);
+    return activeIncomePerSecond(entry, slot, cacheCoreLevel, premiumMultiplier) * NAVIGATION_EVENT_SECONDS * Math.sqrt(level);
   }
 
-  function wakeBurstForLevel(entry, slot, level, cacheCoreLevel = 0) {
+  function wakeBurstForLevel(entry, slot, level, cacheCoreLevel = 0, premiumMultiplier = 1) {
     if (!entry || !slot || level <= 0) return 0;
-    return domainBaseRate(entry, cacheCoreLevel) * 65 * Math.pow(level, 1.1) * slotTierBonus(slot);
+    return domainBaseRate(entry, cacheCoreLevel) * WAKE_BURST_SECONDS * Math.pow(level, 1.1) * slotTierBonus(slot) * masteryIncomeMultiplier(entry) * premiumMultiplier;
   }
 
   global.BrowserTycoonMath = Object.freeze({
@@ -238,11 +310,31 @@
     VAULT_RATE,
     TRAFFIC_ENGINE_MULTIPLIER,
     PRESTIGE_DIVISOR,
+    FIRST_PRESTIGE_LIFETIME_REQUIREMENT,
     SLOT_PRESTIGE_COST_SCALE,
     CACHE_CORE_MULTIPLIER,
     CACHE_CORE_BASE_COST,
     CACHE_CORE_COST_GROWTH,
-    COLD_STORAGE_MULTIPLIER,
+    SUPPORTER_CORE_MULTIPLIER,
+    VAULT_LINEAR_MULTIPLIER,
+    VAULT_POLY_MULTIPLIER,
+    VAULT_POLY_EXPONENT,
+    VAULT_TRAFFIC_EXPONENT,
+    BACKGROUND_TRAFFIC_EXPONENT,
+    DAILY_BASE_MINUTES,
+    DAILY_STREAK_BASE_MULTIPLIER,
+    DAILY_STREAK_BOOT_MULTIPLIER,
+    NAVIGATION_EVENT_SECONDS,
+    WAKE_BURST_SECONDS,
+    MASTERY_RANK_CAP,
+    MASTERY_INCOME_PER_RANK,
+    MASTERY_VAULT_CAP_PER_RANK,
+    MASTERY_LIFETIME_BASE,
+    MASTERY_LIFETIME_RANK_EXPONENT,
+    MASTERY_LIFETIME_GROWTH,
+    MASTERY_CC_BASE_COST,
+    MASTERY_CC_RANK_EXPONENT,
+    MASTERY_CC_GROWTH,
     SCI_ZERO,
     UPGRADE_DEFS,
     SLOT_TIERS,
@@ -257,6 +349,11 @@
     cacheCoreMultiplier,
     cacheCoreCost,
     getUpgradeLevel,
+    masteryRank,
+    masteryIncomeMultiplier,
+    masteryVaultCapMultiplier,
+    masteryLifetimeRequirement,
+    masteryCcCost,
     upgradeCost,
     floorToSignificantFigures,
     slotTierBonus,
@@ -265,8 +362,11 @@
     domainBaseRate,
     tabMultiplier,
     focusMultiplier,
+    vaultUpgradeMultiplier,
     vaultPumpMultiplier,
+    coldStorageMultiplier,
     dailyBootMultiplier,
+    dailyStreakMultiplier,
     vaultCap,
     vaultRate,
     activeIncomePerSecond,

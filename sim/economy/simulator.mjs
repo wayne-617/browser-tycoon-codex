@@ -1,19 +1,21 @@
 export const DEFAULT_SIM_OPTIONS = {
-  days: 21,
-  focusMinutesPerDay: 120,
+  days: 33,
+  focusMinutesPerDay: 150,
   backgroundMinutesPerOtherSlotPerDay: 60,
-  vaultClaimsPerDay: 4,
+  vaultClaimsPerDay: 2,
+  startingCash: 1000,
   startingSlots: 3,
   includeDailyBonus: true,
   enableNavigationBonus: true,
   navigationEventsPerFocusedHour: 5,
   enableWakeBonus: true,
   wakeEventsPerDomainPerDay: 3,
+  enableDomainMastery: true,
   maxUpgradePurchasesPerPeriod: 2000,
   slotTier: 0,
   prestigeMode: true,
-  prestigeResets: 2,
-  prestigeResetDays: [6, 14]
+  prestigeResets: 8,
+  prestigeResetDays: [4, 8, 12, 16, 21, 25, 29, 33]
 };
 
 function floorToSignificantFigures(value, figures = 2) {
@@ -24,8 +26,7 @@ function floorToSignificantFigures(value, figures = 2) {
 
 export function slotUnlockCost(slotNumber) {
   if (slotNumber <= 3) return 0;
-  if (slotNumber === 4) return 500;
-  return floorToSignificantFigures(500 * Math.pow(5, Math.pow(slotNumber - 3.75, 1.35)));
+  return floorToSignificantFigures(1000 * Math.pow(100, Math.max(0, slotNumber - 4)));
 }
 
 export function prestigeTotalFromLifetime(lifetime, prestigeDivisor) {
@@ -41,15 +42,26 @@ function emptyUpgrades(upgradeDefs) {
   return Object.fromEntries(upgradeDefs.map((upgrade) => [upgrade.id, 0]));
 }
 
-function createDomain(index, upgradeDefs) {
+function masteryDefaults() {
   return {
-    id: `domain-${index + 1}`,
+    masteryRank: 0,
+    masteryLifetimeEarned: 0
+  };
+}
+
+function createDomain(index, upgradeDefs, masteryLibrary = new Map()) {
+  const id = `domain-${index + 1}`;
+  const mastery = masteryLibrary.get(id) || masteryDefaults();
+  return {
+    id,
     upgrades: emptyUpgrades(upgradeDefs),
     vaultAmount: 0,
     currentStreak: 0,
     lastVisitedHour: 0,
     dailyBonusClaimedDay: 0,
-    lifetimeEarned: 0
+    lifetimeEarned: 0,
+    masteryRank: mastery.masteryRank || 0,
+    masteryLifetimeEarned: mastery.masteryLifetimeEarned || 0
   };
 }
 
@@ -77,11 +89,36 @@ function slotTierCost(economy, slotId, tier) {
 }
 
 function cacheCoreMultiplier(economy, level) {
-  return Math.pow(economy.cacheCoreMultiplierBase || 1.5, Number(level || 0));
+  return Math.pow(economy.cacheCoreMultiplierBase || 1.45, Number(level || 0));
 }
 
 function cacheCoreCost(economy, level) {
-  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 2, Number(level || 0)));
+  return Math.ceil((economy.cacheCoreBaseCost || 5) * Math.pow(economy.cacheCoreCostGrowth || 1.85, Number(level || 0)));
+}
+
+function masteryRank(domain, economy) {
+  const cap = economy.masteryRankCap ?? 50;
+  return Math.max(0, Math.min(cap, Math.floor(Number(domain?.masteryRank || 0))));
+}
+
+function masteryIncomeMultiplier(domain, economy) {
+  return 1 + masteryRank(domain, economy) * (economy.masteryIncomePerRank ?? 0.02);
+}
+
+function masteryVaultCapMultiplier(domain, economy) {
+  return 1 + masteryRank(domain, economy) * (economy.masteryVaultCapPerRank ?? 0.02);
+}
+
+function masteryLifetimeRequirement(economy, rank) {
+  return (economy.masteryLifetimeBase ?? 1000000)
+    * Math.pow(rank, economy.masteryLifetimeRankExponent ?? 3)
+    * Math.pow(economy.masteryLifetimeGrowth ?? 1.6, rank - 1);
+}
+
+function masteryCcCost(economy, rank) {
+  return Math.ceil((economy.masteryCcBaseCost ?? 2)
+    * Math.pow(rank, economy.masteryCcRankExponent ?? 1.65)
+    * Math.pow(economy.masteryCcGrowth ?? 1.24, rank - 1));
 }
 
 function domainBaseRate(domain, economy, cacheCoreLevel = 0) {
@@ -92,7 +129,13 @@ function activeRate(domain, economy, slotTier, cacheCoreLevel) {
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
   const focusLevel = level(domain, "focusBonus");
   const focus = 1 + 0.35 * focusLevel + 0.01 * Math.pow(focusLevel, 1.2);
-  return domainBaseRate(domain, economy, cacheCoreLevel) * tab * focus * tierBonus(economy, slotTier);
+  return domainBaseRate(domain, economy, cacheCoreLevel) * tab * focus * tierBonus(economy, slotTier) * masteryIncomeMultiplier(domain, economy);
+}
+
+function backgroundBaseRate(domain, economy, cacheCoreLevel) {
+  const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
+  const trafficRatio = Math.pow(economy.trafficEngineMultiplier, level(domain, "trafficEngine"));
+  return economy.baseRate * coreMultiplier * Math.pow(trafficRatio, economy.backgroundTrafficExponent ?? 0.9);
 }
 
 function averageIdleDepthFactor(seconds) {
@@ -108,48 +151,57 @@ function backgroundEarnings(domain, economy, slotTier, seconds, cacheCoreLevel) 
   const idleLevel = level(domain, "idleDepth");
   const idle = 1 + 0.1 * idleLevel * averageIdleDepthFactor(seconds);
   const tab = 1 + 0.15 * level(domain, "tabMultiplier");
-  return domainBaseRate(domain, economy, cacheCoreLevel) * tab * hum * idle * tierBonus(economy, slotTier) * seconds;
+  return backgroundBaseRate(domain, economy, cacheCoreLevel) * tab * hum * idle * tierBonus(economy, slotTier) * masteryIncomeMultiplier(domain, economy) * seconds;
+}
+
+function vaultTrafficScale(domain, economy, cacheCoreLevel) {
+  const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
+  const trafficRatio = domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier);
+  return Math.pow(trafficRatio, economy.vaultTrafficExponent ?? 0.9);
+}
+
+function vaultUpgradeMultiplier(economy, upgradeLevel) {
+  const currentLevel = Math.max(0, Number(upgradeLevel || 0));
+  return 1
+    + (economy.vaultLinearMultiplier ?? 0.12) * currentLevel
+    + (economy.vaultPolyMultiplier ?? 0.005) * Math.pow(currentLevel, economy.vaultPolyExponent ?? 3);
 }
 
 function vaultCap(domain, economy, cacheCoreLevel) {
   const cold = level(domain, "coldStorage");
   const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
-  const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
-  return economy.baseRate * coreMultiplier * 60 * 25 * trafficScale * Math.pow(economy.coldStorageMultiplier || 1.32, cold);
+  return economy.baseRate * coreMultiplier * 60 * 25 * vaultTrafficScale(domain, economy, cacheCoreLevel) * vaultUpgradeMultiplier(economy, cold) * masteryVaultCapMultiplier(domain, economy);
 }
 
 function vaultRate(domain, economy, cacheCoreLevel) {
   const coreMultiplier = cacheCoreMultiplier(economy, cacheCoreLevel);
-  const trafficScale = Math.sqrt(domainBaseRate(domain, economy, cacheCoreLevel) / (economy.baseRate * coreMultiplier));
-  return economy.vaultRate * coreMultiplier * trafficScale * Math.pow(1.3, level(domain, "storageDuration"));
+  return economy.vaultRate * coreMultiplier * vaultTrafficScale(domain, economy, cacheCoreLevel) * vaultUpgradeMultiplier(economy, level(domain, "storageDuration")) * masteryIncomeMultiplier(domain, economy);
 }
 
 function dailyFirstOpenValue(domain, economy, slotTierBonusValue, cacheCoreLevel) {
   const dailyBoot = level(domain, "dailyBoot");
-  const baseDaily = Math.max(20, domainBaseRate(domain, economy, cacheCoreLevel) * 60 * 35);
-  const bootMultiplier = 1 + 0.18 * Math.pow(dailyBoot, 0.95);
-  const streakMultiplier = 1 + Math.min(domain.currentStreak, 14) * 0.04;
+  const baseDaily = Math.max(20, domainBaseRate(domain, economy, cacheCoreLevel) * 60 * (economy.dailyBaseMinutes ?? 60) * masteryIncomeMultiplier(domain, economy));
+  const bootMultiplier = 1 + 0.18 * dailyBoot;
+  const streak = Math.min(domain.currentStreak, 14);
+  const bootAssist = 1 + (economy.dailyStreakBootMultiplier ?? 0.2) * Math.sqrt(dailyBoot);
+  const streakMultiplier = 1 + (economy.dailyStreakBaseMultiplier ?? 0.04) * streak * bootAssist;
   return baseDaily * bootMultiplier * streakMultiplier * slotTierBonusValue;
 }
 
-function dailyFirstOpenBonus(domain, economy, slotTierBonusValue, day, enabled, cacheCoreLevel) {
-  if (!enabled || domain.dailyBonusClaimedDay === day) return 0;
-  return dailyFirstOpenValue(domain, economy, slotTierBonusValue, cacheCoreLevel);
+function claimDailyFirstOpen(domain, economy, slotTier, day, includeDailyBonus, cacheCoreLevel) {
+  const slotBonus = tierBonus(economy, slotTier);
+  if (!includeDailyBonus || domain.dailyBonusClaimedDay === day) return 0;
+  domain.currentStreak += 1;
+  domain.dailyBonusClaimedDay = day;
+  const daily = dailyFirstOpenValue(domain, economy, slotBonus, cacheCoreLevel);
+  return daily;
 }
 
-function claimVault(domain, economy, slotTier, currentHour, day, includeDailyBonus, cacheCoreLevel) {
-  const slotBonus = tierBonus(economy, slotTier);
+function claimVault(domain, economy, slotTier, currentHour, cacheCoreLevel) {
   const stored = Math.min(domain.vaultAmount, vaultCap(domain, economy, cacheCoreLevel));
-  const daily = dailyFirstOpenBonus(domain, economy, slotBonus, day, includeDailyBonus, cacheCoreLevel);
-
-  if (daily > 0) {
-    domain.currentStreak += 1;
-    domain.dailyBonusClaimedDay = day;
-  }
-
   domain.lastVisitedHour = currentHour;
   domain.vaultAmount = 0;
-  return { vault: stored, daily, total: stored + daily };
+  return { vault: stored, total: stored };
 }
 
 function addEarnings(state, domain, amount, bucket) {
@@ -158,6 +210,13 @@ function addEarnings(state, domain, amount, bucket) {
   state.totalLifetimeEarned += amount;
   state.dailyBuckets[bucket] += amount;
   domain.lifetimeEarned += amount;
+  domain.masteryLifetimeEarned += amount;
+  if (state.masteryLibrary) {
+    const mastery = state.masteryLibrary.get(domain.id) || masteryDefaults();
+    mastery.masteryLifetimeEarned += amount;
+    mastery.masteryRank = Math.max(mastery.masteryRank || 0, domain.masteryRank || 0);
+    state.masteryLibrary.set(domain.id, mastery);
+  }
 }
 
 function addVaultFill(state, domain, economy, elapsedSeconds) {
@@ -192,7 +251,7 @@ function spendAvailableMoney(state, economy, dayNumber) {
     if (state.balance >= nextSlotCost) {
       state.balance -= nextSlotCost;
       state.totalSpent += nextSlotCost;
-      state.domains.push(createDomain(state.domains.length, economy.upgradeDefs));
+      state.domains.push(createDomain(state.domains.length, economy.upgradeDefs, state.masteryLibrary));
       state.slots.push(createSlot(nextSlot));
       state.slotUnlocks.push({ slot: nextSlot, day: dayNumber, cost: nextSlotCost });
       purchasesThisPeriod += 1;
@@ -254,12 +313,66 @@ function spendPrestigeOnCacheCore(state, economy) {
   return purchases;
 }
 
+function strongestMasteryDomain(state) {
+  let bestId = null;
+  let bestLifetime = -1;
+  state.masteryLibrary.forEach((mastery, id) => {
+    if ((mastery.masteryLifetimeEarned || 0) > bestLifetime) {
+      bestId = id;
+      bestLifetime = mastery.masteryLifetimeEarned || 0;
+    }
+  });
+  return bestId;
+}
+
+function spendPrestigeOnDomainMastery(state, economy) {
+  const purchases = [];
+  if (!state.config.enableDomainMastery) return purchases;
+  const domainId = strongestMasteryDomain(state);
+  if (!domainId) return purchases;
+  const mastery = state.masteryLibrary.get(domainId) || masteryDefaults();
+  const cap = economy.masteryRankCap ?? 50;
+  while (mastery.masteryRank < cap) {
+    const nextRank = mastery.masteryRank + 1;
+    const requirement = masteryLifetimeRequirement(economy, nextRank);
+    const cost = masteryCcCost(economy, nextRank);
+    if (mastery.masteryLifetimeEarned < requirement || state.cachePoints < cost) break;
+    state.cachePoints -= cost;
+    mastery.masteryRank = nextRank;
+    purchases.push({
+      domainId,
+      rank: nextRank,
+      cost,
+      requirement,
+      masteryLifetimeEarned: mastery.masteryLifetimeEarned,
+      incomeMultiplier: 1 + nextRank * (economy.masteryIncomePerRank ?? 0.02),
+      vaultCapMultiplier: 1 + nextRank * (economy.masteryVaultCapPerRank ?? 0.02)
+    });
+  }
+  state.masteryLibrary.set(domainId, mastery);
+  for (const domain of state.domains) {
+    if (domain.id !== domainId) continue;
+    domain.masteryRank = mastery.masteryRank;
+    domain.masteryLifetimeEarned = mastery.masteryLifetimeEarned;
+  }
+  return purchases;
+}
+
 function resetForPrestige(state, economy, day) {
+  if (state.prestigeCount < 1 && state.totalLifetimeEarned < (economy.firstPrestigeLifetimeRequirement ?? 10000000)) {
+    state.warnings.push({
+      day,
+      type: "prestige_locked",
+      message: `First prestige skipped; lifetime earnings below $${economy.firstPrestigeLifetimeRequirement ?? 10000000}.`
+    });
+    return null;
+  }
   const totalPrestige = prestigeTotalFromLifetime(state.totalLifetimeEarned, economy.prestigeDivisor);
   const award = Math.max(0, totalPrestige - state.cpAlreadyClaimedFromLifetime);
   state.cachePoints += award;
   state.cpAlreadyClaimedFromLifetime = totalPrestige;
   const cacheCorePurchases = spendPrestigeOnCacheCore(state, economy);
+  const masteryPurchases = spendPrestigeOnDomainMastery(state, economy);
   const purchases = spendPrestigeOnSlots(state, economy);
   const highestPersistentSlot = state.slots.reduce((highest, slot) => {
     return slot.id <= 3 || slot.tier > 0 ? Math.max(highest, slot.id) : highest;
@@ -274,7 +387,7 @@ function resetForPrestige(state, economy, day) {
     const existing = state.slots.find((slot) => slot.id === id);
     return createSlot(id, existing?.tier || 0);
   });
-  state.domains = state.slots.map((_, index) => createDomain(index, economy.upgradeDefs));
+  state.domains = state.slots.map((_, index) => createDomain(index, economy.upgradeDefs, state.masteryLibrary));
   const event = {
     day,
     award,
@@ -282,6 +395,8 @@ function resetForPrestige(state, economy, day) {
     cachePointsRemaining: state.cachePoints,
     cacheCoreLevel: state.cacheCoreLevel,
     cacheCorePurchases,
+    masteryPurchases,
+    highestMasteryRank: highestMasteryRank(state.masteryLibrary),
     slotsBefore: previousSlots,
     slotsAfter: state.slots.length,
     purchases
@@ -308,6 +423,22 @@ function totalVaultStored(domains) {
   return domains.reduce((sum, domain) => sum + domain.vaultAmount, 0);
 }
 
+function highestMasteryRank(masteryLibrary) {
+  let highest = 0;
+  masteryLibrary.forEach((mastery) => {
+    highest = Math.max(highest, mastery.masteryRank || 0);
+  });
+  return highest;
+}
+
+function topMasteryLifetime(masteryLibrary) {
+  let highest = 0;
+  masteryLibrary.forEach((mastery) => {
+    highest = Math.max(highest, mastery.masteryLifetimeEarned || 0);
+  });
+  return highest;
+}
+
 function normalizePrestigeResetDays(config) {
   if (!config.prestigeMode) return new Set();
   const validDays = [...new Set((config.prestigeResetDays || [])
@@ -320,10 +451,11 @@ function normalizePrestigeResetDays(config) {
 
 export function simulateEconomy(economy, options = {}) {
   const config = { ...DEFAULT_SIM_OPTIONS, ...options };
+  const startingCash = Math.max(0, Number(config.startingCash || 0));
   const state = {
     config,
-    balance: 0,
-    totalLifetimeEarned: 0,
+    balance: startingCash,
+    totalLifetimeEarned: startingCash,
     totalSpent: 0,
     cachePoints: 0,
     cpAlreadyClaimedFromLifetime: 0,
@@ -331,6 +463,7 @@ export function simulateEconomy(economy, options = {}) {
     prestigeCount: 0,
     currentRun: 1,
     currentRunStartDay: 1,
+    masteryLibrary: new Map(),
     domains: Array.from({ length: config.startingSlots }, (_, index) => createDomain(index, economy.upgradeDefs)),
     slots: Array.from({ length: config.startingSlots }, (_, index) => createSlot(index + 1, config.slotTier)),
     slotUnlocks: Array.from({ length: config.startingSlots }, (_, index) => ({ slot: index + 1, day: 1, cost: 0 })),
@@ -338,11 +471,19 @@ export function simulateEconomy(economy, options = {}) {
     warnings: [],
     dailyBuckets: null
   };
+  state.domains.forEach((domain) => {
+    state.masteryLibrary.set(domain.id, {
+      masteryRank: domain.masteryRank,
+      masteryLifetimeEarned: domain.masteryLifetimeEarned
+    });
+  });
 
   const daily = [];
   const resetDays = normalizePrestigeResetDays(config);
   const periodsPerDay = Math.max(1, Math.floor(config.vaultClaimsPerDay));
   const periodSeconds = 86400 / periodsPerDay;
+
+  spendAvailableMoney(state, economy, 0);
 
   for (let day = 1; day <= config.days; day += 1) {
     state.dailyBuckets = {
@@ -365,6 +506,9 @@ export function simulateEconomy(economy, options = {}) {
         const slot = state.slots[domainIndex] || createSlot(domainIndex + 1);
         addVaultFill(state, domain, economy, periodSeconds);
 
+        const daily = claimDailyFirstOpen(domain, economy, slot.tier, day, config.includeDailyBonus, state.cacheCoreLevel);
+        addEarnings(state, domain, daily, "dailyBonus");
+
         const focused = activeRate(domain, economy, slot.tier, state.cacheCoreLevel) * focusSecondsPerDomain;
         addEarnings(state, domain, focused, "focus");
 
@@ -375,20 +519,19 @@ export function simulateEconomy(economy, options = {}) {
           const events = (focusSecondsPerDomain / 3600) * config.navigationEventsPerFocusedHour;
           const navLevel = level(domain, "navigationBonus");
           const amount = navLevel > 0
-            ? dailyFirstOpenValue(domain, economy, tierBonus(economy, slot.tier), state.cacheCoreLevel) * 0.13 * (1 + 0.18 * navLevel) * events
+            ? activeRate(domain, economy, slot.tier, state.cacheCoreLevel) * (economy.navigationEventSeconds ?? 7) * Math.sqrt(navLevel) * events
             : 0;
           addEarnings(state, domain, amount, "navigation");
         }
 
         if (config.enableWakeBonus && config.wakeEventsPerDomainPerDay > 0) {
           const events = config.wakeEventsPerDomainPerDay / periodsPerDay;
-          const amount = domainBaseRate(domain, economy, state.cacheCoreLevel) * 65 * Math.pow(level(domain, "wakeBonus"), 1.1) * tierBonus(economy, slot.tier) * events;
+          const amount = domainBaseRate(domain, economy, state.cacheCoreLevel) * (economy.wakeBurstSeconds ?? 105) * Math.pow(level(domain, "wakeBonus"), 1.1) * tierBonus(economy, slot.tier) * masteryIncomeMultiplier(domain, economy) * events;
           addEarnings(state, domain, amount, "wake");
         }
 
-        const payout = claimVault(domain, economy, slot.tier, currentHour, day, config.includeDailyBonus, state.cacheCoreLevel);
+        const payout = claimVault(domain, economy, slot.tier, currentHour, state.cacheCoreLevel);
         addEarnings(state, domain, payout.vault, "vaultClaimed");
-        addEarnings(state, domain, payout.daily, "dailyBonus");
       });
 
       spendAvailableMoney(state, economy, day + period / periodsPerDay);
@@ -412,6 +555,8 @@ export function simulateEconomy(economy, options = {}) {
       cachePoints: state.cachePoints,
       cacheCoreLevel: state.cacheCoreLevel,
       cacheCoreMultiplier: cacheCoreMultiplier(economy, state.cacheCoreLevel),
+      highestMasteryRank: highestMasteryRank(state.masteryLibrary),
+      topMasteryLifetime: topMasteryLifetime(state.masteryLibrary),
       prestigeCount: state.prestigeCount,
       prestigeAward: prestigeEvent?.award || 0,
       vaultStored: totalVaultStored(state.domains),
@@ -431,10 +576,13 @@ export function simulateEconomy(economy, options = {}) {
     warnings: state.warnings,
     final: daily[daily.length - 1],
     slots: state.slots.map((slot) => ({ ...slot })),
+    masteryLibrary: Array.from(state.masteryLibrary, ([id, mastery]) => ({ id, ...mastery })),
     domains: state.domains.map((domain) => ({
       id: domain.id,
       upgrades: { ...domain.upgrades },
       lifetimeEarned: domain.lifetimeEarned,
+      masteryLifetimeEarned: domain.masteryLifetimeEarned,
+      masteryRank: domain.masteryRank,
       vaultAmount: domain.vaultAmount
     }))
   };

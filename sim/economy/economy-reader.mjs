@@ -26,9 +26,11 @@ function arrayConst(source, name, fallback) {
 }
 
 async function readMathSource(backgroundPath, backgroundSource) {
-  const importMatch = backgroundSource.match(/importScripts\(["']([^"']*game-math\.js)["']\)/);
-  if (!importMatch) return backgroundSource;
-  const mathPath = path.resolve(path.dirname(backgroundPath), importMatch[1]);
+  const importCall = backgroundSource.match(/importScripts\(([\s\S]*?)\)/);
+  const mathImport = importCall?.[1]
+    ?.match(/["']([^"']*game-math\.js)["']/)?.[1];
+  if (!mathImport) return backgroundSource;
+  const mathPath = path.resolve(path.dirname(backgroundPath), mathImport);
   try {
     return await readFile(mathPath, "utf8");
   } catch {
@@ -47,11 +49,30 @@ export async function readEconomyDefaults(backgroundPath = DEFAULT_BACKGROUND_PA
     vaultRate: numberConst(source, "VAULT_RATE", baseRate * 0.5),
     trafficEngineMultiplier: numberConst(source, "TRAFFIC_ENGINE_MULTIPLIER", 1.18),
     prestigeDivisor: numberConst(source, "PRESTIGE_DIVISOR", 1000000),
+    firstPrestigeLifetimeRequirement: numberConst(source, "FIRST_PRESTIGE_LIFETIME_REQUIREMENT", 10000000),
     slotPrestigeCostScale: numberConst(source, "SLOT_PRESTIGE_COST_SCALE", 1),
-    cacheCoreMultiplierBase: numberConst(source, "CACHE_CORE_MULTIPLIER", 1.5),
+    cacheCoreMultiplierBase: numberConst(source, "CACHE_CORE_MULTIPLIER", 1.45),
     cacheCoreBaseCost: numberConst(source, "CACHE_CORE_BASE_COST", 5),
-    cacheCoreCostGrowth: numberConst(source, "CACHE_CORE_COST_GROWTH", 1.5),
-    coldStorageMultiplier: numberConst(source, "COLD_STORAGE_MULTIPLIER", 1.32),
+    cacheCoreCostGrowth: numberConst(source, "CACHE_CORE_COST_GROWTH", 1.85),
+    vaultLinearMultiplier: numberConst(source, "VAULT_LINEAR_MULTIPLIER", 0.12),
+    vaultPolyMultiplier: numberConst(source, "VAULT_POLY_MULTIPLIER", 0.005),
+    vaultPolyExponent: numberConst(source, "VAULT_POLY_EXPONENT", 3),
+    vaultTrafficExponent: numberConst(source, "VAULT_TRAFFIC_EXPONENT", 0.9),
+    backgroundTrafficExponent: numberConst(source, "BACKGROUND_TRAFFIC_EXPONENT", 0.9),
+    dailyBaseMinutes: numberConst(source, "DAILY_BASE_MINUTES", 60),
+    dailyStreakBaseMultiplier: numberConst(source, "DAILY_STREAK_BASE_MULTIPLIER", 0.04),
+    dailyStreakBootMultiplier: numberConst(source, "DAILY_STREAK_BOOT_MULTIPLIER", 0.2),
+    navigationEventSeconds: numberConst(source, "NAVIGATION_EVENT_SECONDS", 18),
+    wakeBurstSeconds: numberConst(source, "WAKE_BURST_SECONDS", 105),
+    masteryRankCap: numberConst(source, "MASTERY_RANK_CAP", 50),
+    masteryIncomePerRank: numberConst(source, "MASTERY_INCOME_PER_RANK", 0.02),
+    masteryVaultCapPerRank: numberConst(source, "MASTERY_VAULT_CAP_PER_RANK", 0.02),
+    masteryLifetimeBase: numberConst(source, "MASTERY_LIFETIME_BASE", 1000000),
+    masteryLifetimeRankExponent: numberConst(source, "MASTERY_LIFETIME_RANK_EXPONENT", 3),
+    masteryLifetimeGrowth: numberConst(source, "MASTERY_LIFETIME_GROWTH", 1.6),
+    masteryCcBaseCost: numberConst(source, "MASTERY_CC_BASE_COST", 2),
+    masteryCcRankExponent: numberConst(source, "MASTERY_CC_RANK_EXPONENT", 1.65),
+    masteryCcGrowth: numberConst(source, "MASTERY_CC_GROWTH", 1.24),
     upgradeDefs: arrayConst(source, "UPGRADE_DEFS", []),
     slotTiers: arrayConst(source, "SLOT_TIERS", [{ tier: 0, cpCost: 0, bonus: 1 }])
   };

@@ -1,0 +1,59 @@
+{
+  "name": "Welcome Back",
+  "money": 1840000,
+  "incomePerSecond": 842,
+  "cacheCredits": 12,
+  "slotsUnlocked": 4,
+  "welcomeBack": {
+    "enabled": true,
+    "secondsAway": 28800,
+    "focus": 245000,
+    "background": 182000,
+    "daily": 96000,
+    "navigation": 32000,
+    "wake": 75000,
+    "other": 15000
+  },
+  "slots": [
+    {
+      "domain": "youtube.com",
+      "tier": 1,
+      "state": "active",
+      "incomePerSecond": 512,
+      "vaultAmount": 184000,
+      "vaultFull": false,
+      "streak": 8,
+      "checkedToday": true
+    },
+    {
+      "domain": "claude.ai",
+      "tier": 0,
+      "state": "background",
+      "incomePerSecond": 210,
+      "vaultAmount": 92000,
+      "vaultFull": false,
+      "streak": 5,
+      "checkedToday": true
+    },
+    {
+      "domain": "reddit.com",
+      "tier": 0,
+      "state": "background",
+      "incomePerSecond": 120,
+      "vaultAmount": 46000,
+      "vaultFull": false,
+      "streak": 3,
+      "checkedToday": false
+    },
+    {
+      "domain": "gmail.com",
+      "tier": 0,
+      "state": "inactive",
+      "incomePerSecond": 0,
+      "vaultAmount": 18000,
+      "vaultFull": false,
+      "streak": 2,
+      "checkedToday": false
+    }
+  ]
+}

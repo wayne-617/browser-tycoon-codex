@@ -84,6 +84,8 @@ function dailyRows(result) {
     cachePoints: row.cachePoints,
     cacheCoreLevel: row.cacheCoreLevel,
     cacheCoreMultiplier: row.cacheCoreMultiplier,
+    highestMasteryRank: row.highestMasteryRank,
+    topMasteryLifetime: row.topMasteryLifetime,
     prestigeCount: row.prestigeCount,
     prestigeAward: row.prestigeAward,
     vaultStored: row.vaultStored,
@@ -133,6 +135,7 @@ function printSummary(result, outputDir) {
   console.log(`Claimed prestige: ${final.claimedPrestige || 0}`);
   console.log(`Cache points: ${final.cachePoints || 0}`);
   console.log(`Cache Core: level ${final.cacheCoreLevel || 0} (x${(final.cacheCoreMultiplier || 1).toFixed(2)})`);
+  console.log(`Top Mastery: R${final.highestMasteryRank || 0} (lifetime $${compact(final.topMasteryLifetime || 0)})`);
   console.log(`Prestige resets: ${final.prestigeCount || 0}`);
   console.log(`Report: ${path.join(outputDir, "latest.html")}`);
 
@@ -144,7 +147,7 @@ function printSummary(result, outputDir) {
   if (result.prestigeEvents?.length) {
     console.log("\nPrestige resets");
     for (const event of result.prestigeEvents) {
-      console.log(`  Day ${event.day}: +${event.award} CP, Cache Core L${event.cacheCoreLevel || 0}, slots ${event.slotsBefore}->${event.slotsAfter}, purchases ${event.purchases.length}`);
+      console.log(`  Day ${event.day}: +${event.award} CP, Cache Core L${event.cacheCoreLevel || 0}, Mastery R${event.highestMasteryRank || 0}, slots ${event.slotsBefore}->${event.slotsAfter}, purchases ${event.purchases.length}`);
     }
   }
 
@@ -176,10 +179,28 @@ async function main() {
   economy.trafficEngineMultiplier = numberArg(args, "traffic-multiplier", economy.trafficEngineMultiplier);
   economy.prestigeDivisor = numberArg(args, "prestige-divisor", economy.prestigeDivisor);
   economy.slotPrestigeCostScale = numberArg(args, "slot-prestige-cost-scale", economy.slotPrestigeCostScale || 1);
-  economy.cacheCoreMultiplierBase = numberArg(args, "cache-core-multiplier", economy.cacheCoreMultiplierBase || 1.5);
+  economy.cacheCoreMultiplierBase = numberArg(args, "cache-core-multiplier", economy.cacheCoreMultiplierBase || 1.45);
   economy.cacheCoreBaseCost = numberArg(args, "cache-core-base-cost", economy.cacheCoreBaseCost || 5);
-  economy.cacheCoreCostGrowth = numberArg(args, "cache-core-cost-growth", economy.cacheCoreCostGrowth || 1.5);
-  economy.coldStorageMultiplier = numberArg(args, "cold-storage-multiplier", economy.coldStorageMultiplier || 1.32);
+  economy.cacheCoreCostGrowth = numberArg(args, "cache-core-cost-growth", economy.cacheCoreCostGrowth || 1.85);
+  economy.vaultLinearMultiplier = numberArg(args, "vault-linear-multiplier", economy.vaultLinearMultiplier ?? 0.12);
+  economy.vaultPolyMultiplier = numberArg(args, "vault-poly-multiplier", economy.vaultPolyMultiplier ?? 0.005);
+  economy.vaultPolyExponent = numberArg(args, "vault-poly-exponent", economy.vaultPolyExponent ?? 3);
+  economy.vaultTrafficExponent = numberArg(args, "vault-traffic-exponent", economy.vaultTrafficExponent ?? 0.9);
+  economy.backgroundTrafficExponent = numberArg(args, "background-traffic-exponent", economy.backgroundTrafficExponent ?? 0.9);
+  economy.dailyBaseMinutes = numberArg(args, "daily-base-minutes", economy.dailyBaseMinutes ?? 60);
+  economy.dailyStreakBaseMultiplier = numberArg(args, "daily-streak-base-multiplier", economy.dailyStreakBaseMultiplier ?? 0.04);
+  economy.dailyStreakBootMultiplier = numberArg(args, "daily-streak-boot-multiplier", economy.dailyStreakBootMultiplier ?? 0.2);
+  economy.navigationEventSeconds = numberArg(args, "navigation-event-seconds", economy.navigationEventSeconds ?? 18);
+  economy.wakeBurstSeconds = numberArg(args, "wake-burst-seconds", economy.wakeBurstSeconds ?? 105);
+  economy.masteryRankCap = numberArg(args, "mastery-rank-cap", economy.masteryRankCap ?? 50);
+  economy.masteryIncomePerRank = numberArg(args, "mastery-income-per-rank", economy.masteryIncomePerRank ?? 0.02);
+  economy.masteryVaultCapPerRank = numberArg(args, "mastery-vault-cap-per-rank", economy.masteryVaultCapPerRank ?? 0.02);
+  economy.masteryLifetimeBase = numberArg(args, "mastery-lifetime-base", economy.masteryLifetimeBase ?? 1000000);
+  economy.masteryLifetimeRankExponent = numberArg(args, "mastery-lifetime-rank-exponent", economy.masteryLifetimeRankExponent ?? 3);
+  economy.masteryLifetimeGrowth = numberArg(args, "mastery-lifetime-growth", economy.masteryLifetimeGrowth ?? 1.6);
+  economy.masteryCcBaseCost = numberArg(args, "mastery-cc-base-cost", economy.masteryCcBaseCost ?? 2);
+  economy.masteryCcRankExponent = numberArg(args, "mastery-cc-rank-exponent", economy.masteryCcRankExponent ?? 1.65);
+  economy.masteryCcGrowth = numberArg(args, "mastery-cc-growth", economy.masteryCcGrowth ?? 1.24);
 
   const navigationEventsPerFocusedHour = numberArg(args, "navigation-events-per-focused-hour", DEFAULT_SIM_OPTIONS.navigationEventsPerFocusedHour);
   const wakeEventsPerDomainPerDay = numberArg(args, "wake-events-per-domain-day", DEFAULT_SIM_OPTIONS.wakeEventsPerDomainPerDay);
@@ -189,12 +210,14 @@ async function main() {
     focusMinutesPerDay: numberArg(args, "focus-minutes", DEFAULT_SIM_OPTIONS.focusMinutesPerDay),
     backgroundMinutesPerOtherSlotPerDay: numberArg(args, "background-minutes", DEFAULT_SIM_OPTIONS.backgroundMinutesPerOtherSlotPerDay),
     vaultClaimsPerDay: numberArg(args, "vault-claims-per-day", DEFAULT_SIM_OPTIONS.vaultClaimsPerDay),
+    startingCash: numberArg(args, "starting-cash", DEFAULT_SIM_OPTIONS.startingCash),
     startingSlots: numberArg(args, "starting-slots", DEFAULT_SIM_OPTIONS.startingSlots),
     includeDailyBonus: !boolArg(args, "no-daily-bonus", false),
     enableNavigationBonus: boolArg(args, "enable-navigation", DEFAULT_SIM_OPTIONS.enableNavigationBonus) || navigationEventsPerFocusedHour > 0,
     navigationEventsPerFocusedHour,
     enableWakeBonus: boolArg(args, "enable-wake", DEFAULT_SIM_OPTIONS.enableWakeBonus) || wakeEventsPerDomainPerDay > 0,
     wakeEventsPerDomainPerDay,
+    enableDomainMastery: !boolArg(args, "no-domain-mastery", !DEFAULT_SIM_OPTIONS.enableDomainMastery),
     slotTier: numberArg(args, "slot-tier", DEFAULT_SIM_OPTIONS.slotTier),
     prestigeMode: boolArg(args, "prestige-mode", DEFAULT_SIM_OPTIONS.prestigeMode),
     prestigeResets: numberArg(args, "prestige-resets", DEFAULT_SIM_OPTIONS.prestigeResets),
