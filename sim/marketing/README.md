@@ -96,3 +96,23 @@ The exporter uses installed Chrome or Edge in headless mode. If it cannot find a
 ```powershell
 node sim/marketing/run.mjs --screenshot --browser "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
+
+## Short Live Videos
+
+```powershell
+node sim/marketing/run.mjs --video
+```
+
+Videos are saved as 3 second WebM files to:
+
+```txt
+sim/marketing/output/videos/
+```
+
+The video uses the same selected preset/config as the screenshot generator. The popup stays visually frozen except for the top-left balance, which increases at the configured income/sec rate as though the popup were open in that state. You can combine options:
+
+```powershell
+node sim/marketing/run.mjs --preset slot-showcase --video
+node sim/marketing/run.mjs --config sim/marketing/presets/late-game.json --video
+node sim/marketing/run.mjs --preset early-game --video --video-seconds 6
+```

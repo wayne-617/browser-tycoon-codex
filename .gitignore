@@ -1,6 +1,7 @@
 sim/economy/output/
 sim/economy/output-*/
 sim/marketing/output/
+sim/marketing/demo_video/
 v1-popup-screenshot.png
 
 # Browser Tycoon website (Next.js)

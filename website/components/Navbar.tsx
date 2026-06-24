@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { GamepadIcon } from "./Icons";
+import { CHROME_WEB_STORE_URL } from "../lib/links";
 
 type NavbarProps = {
   active?: "home" | "privacy";
@@ -28,10 +29,15 @@ export function Navbar({ active = "home" }: NavbarProps) {
             );
           })}
         </div>
-        <Link href="/#features" className="nav-play absolute right-5 flex items-center gap-2.5 sm:right-8">
+        <a
+          href={CHROME_WEB_STORE_URL}
+          className="nav-play absolute right-5 flex items-center gap-2.5 sm:right-8"
+          target="_blank"
+          rel="noreferrer"
+        >
           <span>Play Now</span>
           <GamepadIcon className="h-6 w-6" />
-        </Link>
+        </a>
         <Link href="/#home" className="mobile-brand absolute left-5 text-lg font-bold tracking-[0.12em] text-cyan lg:hidden">BT</Link>
       </nav>
     </header>
