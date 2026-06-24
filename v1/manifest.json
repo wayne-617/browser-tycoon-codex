@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Browser Tycoon",
+  "name": "Browser Tycoon – Idle Game for Chrome",
   "description": "Turn everyday browsing into an idle tycoon game. Earn cash, upgrade sites, and build your browsing empire.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "action": {
     "default_title": "Browser Tycoon",
     "default_popup": "popup.html"
@@ -31,10 +31,6 @@
     "storage",
     "tabs",
     "webNavigation"
-  ],
-  "host_permissions": [
-    "http://*/*",
-    "https://*/*"
   ],
   "icons": {
     "16": "icons/b-logo-no-outline.png",

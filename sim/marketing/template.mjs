@@ -239,7 +239,7 @@ export function renderMarketingPage(config, paths) {
 
     function slotUnlockCost(slotNumber) {
       if (slotNumber <= 3) return 0;
-      return floorToSignificantFigures(1000 * Math.pow(100, Math.max(0, slotNumber - 4)));
+      return floorToSignificantFigures(10000 * Math.pow(100, Math.max(0, slotNumber - 4)));
     }
 
     function upgradeCost(def, level) {

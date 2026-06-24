@@ -1,4 +1,4 @@
-importScripts("ExtPay.js", "game-math.js");
+importScripts("ExtPay.js", "game-math.js", "cloud-save.js");
 
 const {
   SCI_ZERO,
@@ -36,6 +36,14 @@ const {
   wakeBurstForLevel
 } = BrowserTycoonMath;
 
+const {
+  FORMAT_VERSION: CLOUD_SAVE_FORMAT_VERSION,
+  TOTAL_TARGET_BYTES: CLOUD_SAVE_TOTAL_TARGET_BYTES,
+  storageItemBytes,
+  chunkDomainLibrary,
+  assembleDomainLibrary
+} = BrowserTycoonCloudSave;
+
 const EXTPAY_EXTENSION_ID = "browser-tycoon";
 const SUPPORTER_CORE_PLAN = "supporter-core";
 const PREMIUM_STATUS_MAX_AGE_MS = 10 * 60 * 1000;
@@ -54,8 +62,12 @@ const NOTIFICATION_IDS = {
   bigPayout: "browser-tycoon:big-payout",
   streakRisk: "browser-tycoon:streak-risk"
 };
+const REDIRECT_ALIAS_MAX_AGE_MS = 30 * DAY_MS;
+const REDIRECT_ALIAS_LIMIT = 100;
+const NAVIGATION_START_MAX_AGE_MS = 2 * 60 * 1000;
 const CLOUD_SAVE_KEY = "cloudSave";
 const CLOUD_SAVE_META_KEY = "cloudSaveMeta";
+const CLOUD_SAVE_DATA_PREFIX = "cloudSaveData:";
 const DEFAULT_NOTIFICATION_SETTINGS = Object.freeze({
   enabled: false,
   vaultFull: true,
@@ -63,6 +75,7 @@ const DEFAULT_NOTIFICATION_SETTINGS = Object.freeze({
   streakRisk: true
 });
 const WELCOME_BACK_SOURCES = new Set(["focus", "background", "daily", "navigation", "wake"]);
+const pendingNavigationStarts = new Map();
 
 function makeExtPay() {
   return typeof ExtPay === "function" ? ExtPay(EXTPAY_EXTENSION_ID) : null;
@@ -80,11 +93,14 @@ const TODAY = () => localDateKey();
 function normalizeCurrencyState(sync, local) {
   sync.balance = toSci(sync.balance);
   sync.totalLifetimeEarned = toSci(sync.totalLifetimeEarned);
-  for (const entry of Object.values(local.domainLibrary || {})) {
+  for (const [domain, entry] of Object.entries(local.domainLibrary || {})) {
     entry.vaultAmount = toSci(entry.vaultAmount);
     entry.lifetimeEarned = toSci(entry.lifetimeEarned);
     entry.masteryLifetimeEarned = toSci(entry.masteryLifetimeEarned || entry.lifetimeEarned);
     entry.masteryRank = masteryRank(entry);
+    const trackingDomain = normalizeDomainInput(entry.trackingDomain);
+    if (trackingDomain && trackingDomain !== domain) entry.trackingDomain = trackingDomain;
+    else delete entry.trackingDomain;
   }
 }
 
@@ -126,6 +142,7 @@ function defaultLocalState() {
     lastAccrualAt: Date.now(),
     lastNavigationBonusAt: {},
     lastWakeBonusAt: {},
+    redirectAliases: {},
     lastPopupSeenAt: 0,
     lastPopupBalance: null,
     pendingWelcomeBack: null,
@@ -188,6 +205,7 @@ async function getState() {
   sync.notificationSettings = normalizeNotificationSettings(syncRaw.notificationSettings ?? sync.notificationSettings, sync.onboardingComplete);
   sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
   local.notificationState = normalizeNotificationState(local.notificationState);
+  local.redirectAliases = normalizeRedirectAliases(local.redirectAliases);
   normalizeCurrencyState(sync, local);
   return { sync, local };
 }
@@ -214,6 +232,7 @@ function localStoragePayload(sync, local) {
     lastAccrualAt: local.lastAccrualAt,
     lastNavigationBonusAt: local.lastNavigationBonusAt,
     lastWakeBonusAt: local.lastWakeBonusAt,
+    redirectAliases: local.redirectAliases,
     lastPopupSeenAt: local.lastPopupSeenAt,
     lastPopupBalance: local.lastPopupBalance,
     pendingWelcomeBack: local.pendingWelcomeBack,
@@ -225,16 +244,14 @@ async function saveState(sync, local) {
   await chrome.storage.local.set(localStoragePayload(sync, local));
 }
 
-async function saveOnboardingState(sync, local, complete, step, { grantStarterCash = false, resetStarterCash = false } = {}) {
+async function saveOnboardingState(sync, local, complete, step, { grantStarterCash = false } = {}) {
   const nextComplete = Boolean(complete);
   const nextStep = step || (nextComplete ? "complete" : "intro");
-  const nextStarterCashClaimed = resetStarterCash ? false : sync.onboardingStarterCashClaimed;
   const shouldGrantStarterCash = grantStarterCash && !sync.onboardingStarterCashClaimed;
   const shouldEnableNotifications = nextComplete && !sync.onboardingComplete;
   if (
     sync.onboardingComplete === nextComplete &&
     sync.onboardingStep === nextStep &&
-    sync.onboardingStarterCashClaimed === nextStarterCashClaimed &&
     !shouldGrantStarterCash &&
     !shouldEnableNotifications
   ) {
@@ -242,7 +259,6 @@ async function saveOnboardingState(sync, local, complete, step, { grantStarterCa
   }
   sync.onboardingComplete = nextComplete;
   sync.onboardingStep = nextStep;
-  sync.onboardingStarterCashClaimed = nextStarterCashClaimed;
   if (shouldEnableNotifications) {
     sync.notificationSettings = {
       ...normalizeNotificationSettings(sync.notificationSettings, false),
@@ -294,6 +310,41 @@ function normalizeDomainInput(input) {
     const parsed = new URL(withProtocol);
     if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return null;
     return parsed.hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRedirectAliases(aliases, now = Date.now()) {
+  if (!aliases || typeof aliases !== "object") return {};
+  const normalized = [];
+  for (const [sourceRaw, value] of Object.entries(aliases)) {
+    const sourceDomain = normalizeDomainInput(sourceRaw);
+    const targetRaw = typeof value === "string" ? value : value?.targetDomain;
+    const targetDomain = normalizeDomainInput(targetRaw);
+    const updatedAt = Number(typeof value === "string" ? now : value?.updatedAt || 0);
+    if (!sourceDomain || !targetDomain || sourceDomain === targetDomain) continue;
+    if (!Number.isFinite(updatedAt) || now - updatedAt > REDIRECT_ALIAS_MAX_AGE_MS) continue;
+    normalized.push([sourceDomain, { targetDomain, updatedAt }]);
+  }
+  normalized.sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+  return Object.fromEntries(normalized.slice(0, REDIRECT_ALIAS_LIMIT));
+}
+
+function redirectAliasTarget(local, sourceDomain) {
+  const source = normalizeDomainInput(sourceDomain);
+  if (!source) return null;
+  const entry = local.redirectAliases?.[source];
+  const target = normalizeDomainInput(typeof entry === "string" ? entry : entry?.targetDomain);
+  return target && target !== source ? target : null;
+}
+
+function faviconPageUrlFromUrl(url, expectedDomain = null) {
+  try {
+    const parsed = new URL(url || "");
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return null;
+    if (expectedDomain && normalizeDomainFromUrl(parsed.href) !== expectedDomain) return null;
+    return `${parsed.protocol}//${parsed.hostname.toLowerCase()}/`;
   } catch {
     return null;
   }
@@ -384,7 +435,87 @@ function getDomainEntry(local, domain) {
   local.domainLibrary[domain].lifetimeEarned = toSci(local.domainLibrary[domain].lifetimeEarned);
   local.domainLibrary[domain].masteryLifetimeEarned = toSci(local.domainLibrary[domain].masteryLifetimeEarned || local.domainLibrary[domain].lifetimeEarned);
   local.domainLibrary[domain].masteryRank = masteryRank(local.domainLibrary[domain]);
+  const trackingDomain = normalizeDomainInput(local.domainLibrary[domain].trackingDomain);
+  if (trackingDomain && trackingDomain !== domain) local.domainLibrary[domain].trackingDomain = trackingDomain;
+  else delete local.domainLibrary[domain].trackingDomain;
+  const faviconPageUrl = faviconPageUrlFromUrl(local.domainLibrary[domain].faviconPageUrl, domain)
+    || faviconPageUrlFromUrl(local.domainLibrary[domain].faviconPageUrl, local.domainLibrary[domain].trackingDomain);
+  if (faviconPageUrl) local.domainLibrary[domain].faviconPageUrl = faviconPageUrl;
+  else delete local.domainLibrary[domain].faviconPageUrl;
   return local.domainLibrary[domain];
+}
+
+function trackingDomainForEntry(entry, domain) {
+  const trackingDomain = normalizeDomainInput(entry?.trackingDomain);
+  return trackingDomain && trackingDomain !== domain ? trackingDomain : null;
+}
+
+function updateEntryFaviconPageUrl(entry, url, expectedDomain) {
+  const faviconPageUrl = faviconPageUrlFromUrl(url, expectedDomain);
+  if (!faviconPageUrl || entry.faviconPageUrl === faviconPageUrl) return false;
+  entry.faviconPageUrl = faviconPageUrl;
+  return true;
+}
+
+function updateDomainFaviconPageUrl(local, domain, url, expectedDomain = domain) {
+  const entry = local.domainLibrary?.[domain];
+  if (!entry) return false;
+  return updateEntryFaviconPageUrl(entry, url, expectedDomain);
+}
+
+function updateObservedDomainFaviconPageUrl(local, observedDomain, url) {
+  if (updateDomainFaviconPageUrl(local, observedDomain, url, observedDomain)) return true;
+  for (const [domain, entry] of Object.entries(local.domainLibrary || {})) {
+    if (trackingDomainForEntry(entry, domain) !== observedDomain) continue;
+    return updateEntryFaviconPageUrl(entry, url, observedDomain);
+  }
+  return false;
+}
+
+function learnRedirectAlias(local, sourceDomain, targetDomain, targetUrl, now = Date.now()) {
+  const source = normalizeDomainInput(sourceDomain);
+  const target = normalizeDomainInput(targetDomain);
+  if (!source || !target || source === target) return false;
+  local.redirectAliases = normalizeRedirectAliases({
+    ...(local.redirectAliases || {}),
+    [source]: { targetDomain: target, updatedAt: now }
+  }, now);
+  const entry = local.domainLibrary?.[source];
+  if (entry) {
+    entry.trackingDomain = target;
+    updateEntryFaviconPageUrl(entry, targetUrl, target);
+  }
+  return true;
+}
+
+function applyRedirectAliasToEntry(local, domain, entry) {
+  if (trackingDomainForEntry(entry, domain)) return false;
+  const target = redirectAliasTarget(local, domain);
+  if (!target) return false;
+  entry.trackingDomain = target;
+  return true;
+}
+
+function findSlotForObservedDomain(sync, local, observedDomain) {
+  if (!observedDomain) return null;
+  const directSlot = sync.slots.find((slot) => slot.assignedDomain === observedDomain);
+  if (directSlot) return { slot: directSlot, domain: observedDomain, entry: getDomainEntry(local, observedDomain), direct: true };
+
+  for (const slot of sync.slots) {
+    const domain = slot.assignedDomain;
+    if (!domain) continue;
+    const entry = getDomainEntry(local, domain);
+    if (trackingDomainForEntry(entry, domain) === observedDomain) return { slot, domain, entry, direct: false };
+  }
+  return null;
+}
+
+function observedDomainsForSlot(sync, local, domain) {
+  const entry = getDomainEntry(local, domain);
+  const domains = [domain];
+  const trackingDomain = trackingDomainForEntry(entry, domain);
+  if (trackingDomain && !sync.slots.some((slot) => slot.assignedDomain === trackingDomain)) domains.push(trackingDomain);
+  return domains;
 }
 
 function canAddDomain(local, domain) {
@@ -699,6 +830,7 @@ async function rebuildPresence(sync, local, eligibleWindow = null) {
       if (tab.incognito) continue;
       const domain = normalizeDomainFromUrl(tab.url);
       if (!domain) continue;
+      updateObservedDomainFaviconPageUrl(local, domain, tab.url);
       domains[domain] ||= { openCount: 0, active: false };
       domains[domain].openCount += 1;
       if (tab.active && domain === foregroundDomain) domains[domain].active = true;
@@ -709,8 +841,17 @@ async function rebuildPresence(sync, local, eligibleWindow = null) {
   const now = Date.now();
   const next = {};
   for (const domain of slotted) {
+    const entry = getDomainEntry(local, domain);
+    applyRedirectAliasToEntry(local, domain, entry);
     const old = local.presence[domain];
-    const seen = domains[domain];
+    let seen = null;
+    for (const observedDomain of observedDomainsForSlot(sync, local, domain)) {
+      const observed = domains[observedDomain];
+      if (!observed) continue;
+      seen ||= { openCount: 0, active: false };
+      seen.openCount += observed.openCount;
+      seen.active ||= observed.active;
+    }
     const slot = sync.slots.find((item) => item.assignedDomain === domain);
     let state = "closed";
     if (seen?.active) state = "active";
@@ -719,12 +860,11 @@ async function rebuildPresence(sync, local, eligibleWindow = null) {
     const sameEligibleWindow = win && Number(old?.windowId) === Number(win.id);
     const lastWake = local.lastWakeBonusAt[domain] || 0;
     if (sameEligibleWindow && old?.state === "background" && state === "active" && slot && now - lastWake >= EVENT_BONUS_COOLDOWN_MS) {
-      const entry = getDomainEntry(local, domain);
       const amount = wakeBurstForLevel(entry, slot, getUpgradeLevel(entry, "wakeBonus"), sync.cacheCoreLevel, supporterCoreMultiplier(local));
       recordEarnings(sync, local, entry, amount, { source: "wake", now });
       local.lastWakeBonusAt[domain] = now;
     }
-    if (state === "active") recordFocusedVisitAndDaily(sync, local, getDomainEntry(local, domain), slot, now);
+    if (state === "active") recordFocusedVisitAndDaily(sync, local, entry, slot, now);
     next[domain] = {
       state,
       openCount: seen?.openCount || 0,
@@ -807,6 +947,66 @@ function cloudSaveMetadata(save) {
   };
 }
 
+function cloudSaveDataKey(saveId, type, index = null) {
+  const suffix = index === null ? type : `${type}:${index}`;
+  return `${CLOUD_SAVE_DATA_PREFIX}${saveId}:${suffix}`;
+}
+
+async function clearExistingCloudSaveData() {
+  const existing = await chrome.storage.sync.get(null);
+  const staleKeys = Object.keys(existing).filter((key) => key === CLOUD_SAVE_KEY || key.startsWith(CLOUD_SAVE_DATA_PREFIX));
+  if (staleKeys.length > 0) await chrome.storage.sync.remove(staleKeys);
+}
+
+function makeChunkedCloudSave(save) {
+  const saveId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const gameKey = cloudSaveDataKey(saveId, "game");
+  const chunkKey = (index) => cloudSaveDataKey(saveId, "domains", index);
+  const domainChunks = chunkDomainLibrary(save.domainLibrary, chunkKey);
+  const gameData = {
+    version: save.version,
+    savedAt: save.savedAt,
+    gameSync: save.gameSync,
+    notificationSettings: save.notificationSettings,
+    metadata: save.metadata
+  };
+  const metadata = {
+    ...cloudSaveMetadata(save),
+    formatVersion: CLOUD_SAVE_FORMAT_VERSION,
+    saveId,
+    domainChunkCount: domainChunks.length
+  };
+  const payload = { [gameKey]: gameData };
+  domainChunks.forEach((chunk, index) => {
+    payload[chunkKey(index)] = chunk;
+  });
+
+  const perItemLimit = Number(chrome.storage.sync.QUOTA_BYTES_PER_ITEM || 8192);
+  for (const [key, value] of Object.entries(payload)) {
+    if (storageItemBytes(key, value) > perItemLimit) throw new Error("Cloud save item exceeds Chrome Sync limits.");
+  }
+  const totalBytes = Object.entries(payload).reduce((total, [key, value]) => total + storageItemBytes(key, value), 0)
+    + storageItemBytes(CLOUD_SAVE_META_KEY, metadata)
+    + storageItemBytes("notificationSettings", save.notificationSettings);
+  if (totalBytes > CLOUD_SAVE_TOTAL_TARGET_BYTES) throw new Error("Cloud save is too large for Chrome Sync.");
+
+  return { payload, metadata };
+}
+
+async function readCloudSave(result) {
+  const metadata = result[CLOUD_SAVE_META_KEY];
+  if (Number(metadata?.formatVersion || 0) !== CLOUD_SAVE_FORMAT_VERSION) return result[CLOUD_SAVE_KEY] || null;
+  if (!metadata.saveId || !Number.isInteger(metadata.domainChunkCount) || metadata.domainChunkCount < 0) return null;
+
+  const gameKey = cloudSaveDataKey(metadata.saveId, "game");
+  const chunkKeys = Array.from({ length: metadata.domainChunkCount }, (_, index) => cloudSaveDataKey(metadata.saveId, "domains", index));
+  const data = await chrome.storage.sync.get([gameKey, ...chunkKeys]);
+  const gameData = data[gameKey];
+  const chunks = chunkKeys.map((key) => data[key]);
+  if (!gameData?.gameSync || chunks.some((chunk) => !chunk || typeof chunk !== "object")) return null;
+  return { ...gameData, domainLibrary: assembleDomainLibrary(chunks) };
+}
+
 async function getCloudSaveMeta() {
   const result = await chrome.storage.sync.get({ [CLOUD_SAVE_META_KEY]: null });
   return result[CLOUD_SAVE_META_KEY] || null;
@@ -815,17 +1015,19 @@ async function getCloudSaveMeta() {
 async function syncCloudSave() {
   const { sync, local } = await settleAndSave();
   const cloudSave = makeCloudSave(sync, local);
+  const chunked = makeChunkedCloudSave(cloudSave);
+  await clearExistingCloudSaveData();
+  await chrome.storage.sync.set(chunked.payload);
   await chrome.storage.sync.set({
-    [CLOUD_SAVE_KEY]: cloudSave,
-    [CLOUD_SAVE_META_KEY]: cloudSaveMetadata(cloudSave),
+    [CLOUD_SAVE_META_KEY]: chunked.metadata,
     notificationSettings: sync.notificationSettings
   });
-  return { ok: true, cloudSaveMeta: cloudSaveMetadata(cloudSave) };
+  return { ok: true, cloudSaveMeta: chunked.metadata };
 }
 
 async function loadCloudSave() {
-  const result = await chrome.storage.sync.get({ [CLOUD_SAVE_KEY]: null, notificationSettings: null });
-  const cloudSave = result[CLOUD_SAVE_KEY];
+  const result = await chrome.storage.sync.get({ [CLOUD_SAVE_KEY]: null, [CLOUD_SAVE_META_KEY]: null, notificationSettings: null });
+  const cloudSave = await readCloudSave(result);
   if (!cloudSave?.gameSync) return { ok: false, error: "No synced save found." };
   const sync = {
     ...defaultSyncState(),
@@ -1017,6 +1219,7 @@ async function getSnapshot() {
     currentSite: {
       domain: currentDomain,
       valid: Boolean(currentDomain),
+      faviconPageUrl: faviconPageUrlFromUrl(activeTab?.url, currentDomain),
       reason: currentDomain ? "" : "Open a normal http or https page first."
     }
   };
@@ -1069,14 +1272,13 @@ function buyUpgrade(sync, local, domain, upgradeId, mode) {
 }
 
 async function addCurrentSite(slotId) {
-  const domain = await activeTabDomain();
-  if (!domain) return { ok: false, error: "This page cannot be added." };
-  return assignDomainToSlot(slotId, domain, { fromCurrentSite: true });
-}
-
-async function activeTabDomain() {
   const tab = await activeTabInEligibleWindow();
-  return normalizeDomainFromUrl(tab?.url);
+  const domain = normalizeDomainFromUrl(tab?.url);
+  if (!domain) return { ok: false, error: "This page cannot be added." };
+  return assignDomainToSlot(slotId, domain, {
+    fromCurrentSite: true,
+    faviconPageUrl: faviconPageUrlFromUrl(tab?.url, domain)
+  });
 }
 
 async function isForegroundTab(tabId) {
@@ -1107,6 +1309,9 @@ async function assignDomainToSlot(slotId, domain, options = {}) {
     return { ok: false, error: `${domain} is already in slot ${existingSlot.id}.` };
   }
   const entry = getDomainEntry(local, domain);
+  applyRedirectAliasToEntry(local, domain, entry);
+  const faviconPageUrl = faviconPageUrlFromUrl(options.faviconPageUrl, trackingDomainForEntry(entry, domain) || domain);
+  if (faviconPageUrl) entry.faviconPageUrl = faviconPageUrl;
   const incomingWasSlotted = Boolean(existingSlot);
   if (slot.assignedDomain && slot.assignedDomain !== domain && !incomingWasSlotted) {
     const today = TODAY();
@@ -1170,6 +1375,7 @@ async function deleteDomain(domain) {
   delete local.presence[domain];
   delete local.lastNavigationBonusAt[domain];
   delete local.lastWakeBonusAt[domain];
+  if (local.redirectAliases) delete local.redirectAliases[domain];
   local.notificationState = normalizeNotificationState(local.notificationState);
   local.notificationState.vaultFullNotified = false;
   await saveState(sync, local);
@@ -1302,48 +1508,6 @@ async function clearCachePrestige() {
   return { ok: true, award };
 }
 
-async function devAddCash(amount = 1000) {
-  const { sync, local } = await settleAndSave();
-  const value = Number(amount);
-  if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid cash amount." };
-  recordEarnings(sync, local, null, value, {
-    source: "bonus",
-    welcomeBackEligible: false
-  });
-  await saveState(sync, local);
-  return { ok: true, amount: value };
-}
-
-async function devAddCachePoints(amount = 10) {
-  const { sync, local } = await settleAndSave();
-  const value = Number(amount);
-  if (!Number.isFinite(value) || value <= 0) return { ok: false, error: "Invalid CC amount." };
-  sync.cacheCredits += value;
-  await saveState(sync, local);
-  return { ok: true, amount: value };
-}
-
-async function devResetCashAndCachePoints() {
-  const { sync, local } = await settleAndSave();
-  sync.balance = { ...SCI_ZERO };
-  sync.cacheCredits = 0;
-  await saveState(sync, local);
-  return { ok: true };
-}
-
-async function devResetLifetime() {
-  const { sync, local } = await settleAndSave();
-  sync.totalLifetimeEarned = { ...SCI_ZERO };
-  sync.ccAlreadyClaimedFromLifetime = 0;
-  for (const entry of Object.values(local.domainLibrary)) {
-    entry.lifetimeEarned = { ...SCI_ZERO };
-    entry.masteryLifetimeEarned = { ...SCI_ZERO };
-    entry.masteryRank = 0;
-  }
-  await saveState(sync, local);
-  return { ok: true };
-}
-
 async function openPremiumPayment() {
   const currentExtPay = makeExtPay();
   if (!currentExtPay?.openPaymentPage) return { ok: false, error: "ExtensionPay is not available." };
@@ -1393,30 +1557,59 @@ async function updateNotificationSettings(patch = {}) {
   return { ok: true, notificationSettings: sync.notificationSettings };
 }
 
+function trackNavigationStart(details) {
+  if (details.frameId !== 0 || details.tabId < 0) return;
+  const domain = normalizeDomainFromUrl(details.url);
+  if (!domain) return;
+  const existing = pendingNavigationStarts.get(details.tabId);
+  if (existing && Date.now() - Number(existing.startedAt || 0) <= NAVIGATION_START_MAX_AGE_MS) return;
+  pendingNavigationStarts.set(details.tabId, {
+    domain,
+    url: details.url,
+    startedAt: Date.now()
+  });
+}
+
+function consumeNavigationStart(details, now = Date.now()) {
+  const start = pendingNavigationStarts.get(details.tabId);
+  pendingNavigationStarts.delete(details.tabId);
+  if (!start || now - Number(start.startedAt || 0) > NAVIGATION_START_MAX_AGE_MS) return null;
+  return start;
+}
+
 async function navigationBonus(details) {
   if (details.frameId !== 0) return;
   const domain = normalizeDomainFromUrl(details.url);
   if (!domain) return;
+  try {
+    const tab = await chrome.tabs.get(details.tabId);
+    if (tab?.incognito) return;
+  } catch (_error) {}
+  const now = Date.now();
+  const navigationStart = consumeNavigationStart(details, now);
   const isForeground = await isForegroundTab(details.tabId);
   const eligibleWindow = await getEligibleFocusedWindow();
   const { sync, local } = await getState();
-  settleAccrual(sync, local, Date.now(), eligibleWindow);
-  const slot = sync.slots.find((item) => item.assignedDomain === domain);
-  if (!slot) {
+  updateObservedDomainFaviconPageUrl(local, domain, details.url);
+  if (navigationStart?.domain && navigationStart.domain !== domain) {
+    learnRedirectAlias(local, navigationStart.domain, domain, details.url, now);
+  }
+  settleAccrual(sync, local, now, eligibleWindow);
+  const match = findSlotForObservedDomain(sync, local, domain);
+  if (!match) {
     await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
     await updateBadge(sync);
     return;
   }
-  const now = Date.now();
   if (!isForeground) {
     await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
     await updateBadge(sync);
     return;
   }
-  if (isForeground) recordForegroundDomainEvent(sync, local, domain, slot, now);
-  const entry = getDomainEntry(local, domain);
+  if (isForeground) recordForegroundDomainEvent(sync, local, match.domain, match.slot, now);
+  const entry = match.entry;
   const level = getUpgradeLevel(entry, "navigationBonus");
   if (level <= 0) {
     await rebuildPresence(sync, local, eligibleWindow);
@@ -1424,15 +1617,15 @@ async function navigationBonus(details) {
     await updateBadge(sync);
     return;
   }
-  const last = local.lastNavigationBonusAt[domain] || 0;
+  const last = local.lastNavigationBonusAt[match.domain] || 0;
   if (now - last < EVENT_BONUS_COOLDOWN_MS) {
     await rebuildPresence(sync, local, eligibleWindow);
     await saveState(sync, local);
     await updateBadge(sync);
     return;
   }
-  const amount = navigationPayoutForLevel(entry, slot, level, sync.cacheCoreLevel, supporterCoreMultiplier(local));
-  local.lastNavigationBonusAt[domain] = now;
+  const amount = navigationPayoutForLevel(entry, match.slot, level, sync.cacheCoreLevel, supporterCoreMultiplier(local));
+  local.lastNavigationBonusAt[match.domain] = now;
   recordEarnings(sync, local, entry, amount, { source: "navigation", now });
   await rebuildPresence(sync, local, eligibleWindow);
   await saveState(sync, local);
@@ -1484,10 +1677,14 @@ chrome.tabs.onActivated.addListener(() => settleAndSave());
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.status === "complete") settleAndSave();
 });
-chrome.tabs.onRemoved.addListener(() => settleAndSave());
+chrome.tabs.onRemoved.addListener((tabId) => {
+  pendingNavigationStarts.delete(tabId);
+  settleAndSave();
+});
 chrome.windows.onFocusChanged.addListener(() => settleAndSave());
 chrome.windows.onRemoved.addListener(() => settleAndSave());
 chrome.windows.onBoundsChanged.addListener(() => scheduleSettle(250));
+chrome.webNavigation.onBeforeNavigate.addListener(trackNavigationStart);
 chrome.webNavigation.onCommitted.addListener(navigationBonus);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -1497,7 +1694,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "addCurrentSite") return addCurrentSite(message.slotId);
       if (message.type === "assignDomain") return assignDomainToSlot(message.slotId, message.domain, {
         fromCurrentSite: Boolean(message.fromCurrentSite),
-        currentDomain: message.currentDomain
+        currentDomain: message.currentDomain,
+        faviconPageUrl: message.faviconPageUrl
       });
       if (message.type === "swapSlots") return swapSlots(message.fromSlotId, message.toSlotId);
       if (message.type === "removeDomain") return removeDomain(message.slotId);
@@ -1515,10 +1713,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "upgradeCacheCore") return upgradeCacheCore();
       if (message.type === "upgradeDomainMastery") return upgradeDomainMastery(message.domain);
       if (message.type === "prestige") return clearCachePrestige();
-      if (message.type === "devAddCash") return devAddCash(message.amount);
-      if (message.type === "devAddCachePoints") return devAddCachePoints(message.amount);
-      if (message.type === "devResetCashAndCachePoints") return devResetCashAndCachePoints();
-      if (message.type === "devResetLifetime") return devResetLifetime();
       if (message.type === "openPremiumPayment") return openPremiumPayment();
       if (message.type === "openPremiumLogin") return openPremiumLogin();
       if (message.type === "refreshPremiumStatus") return forceRefreshPremiumStatus();
@@ -1530,11 +1724,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const alreadyClaimed = Boolean(sync.onboardingStarterCashClaimed);
         await saveOnboardingState(sync, local, true, "complete", { grantStarterCash: true });
         return { ok: true, starterCash: alreadyClaimed ? 0 : ONBOARDING_STARTER_CASH };
-      }
-      if (message.type === "resetOnboarding") {
-        const { sync, local } = await getState();
-        await saveOnboardingState(sync, local, false, "intro", { resetStarterCash: true });
-        return { ok: true };
       }
       if (message.type === "setOnboardingStep") {
         const { sync, local } = await getState();
