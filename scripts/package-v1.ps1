@@ -64,7 +64,7 @@ foreach ($relativePath in $runtimeFiles) {
 
 $manifest = Get-Content -LiteralPath (Join-Path $sourceRoot "manifest.json") -Raw | ConvertFrom-Json
 if ($manifest.manifest_version -ne 3) { Fail "manifest_version must be 3." }
-if ($manifest.version -ne "1.0.1") { Fail "manifest version must be 1.0.1." }
+if ($manifest.version -ne "1.0.2") { Fail "manifest version must be 1.0.2." }
 if ($null -ne $manifest.host_permissions) { Fail "Broad host_permissions must not be present." }
 
 foreach ($relativePath in $firstPartyTextFiles) {

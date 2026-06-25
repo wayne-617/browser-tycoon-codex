@@ -20,12 +20,14 @@ let lastRenderedRouteKey = "";
 let toastTimer = null;
 let modal = null;
 let collectBurst = null;
+let collectBurstStartedAt = 0;
 let collectBurstTimer = null;
 let balanceRoll = null;
 let balanceRollFrame = null;
 let onboardingSurfaceRestored = false;
 
 const FEEDBACK_FORM_URL = "https://forms.gle/GP8nFvBRYaw4nWds5";
+const REVIEW_URL = "https://chromewebstore.google.com/detail/bkioklcimaadbkfceagmkadfffpghhkd?utm_source=item-share-cb";
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
 const BUY_MODES = ["1", "10"];
 const {
@@ -113,6 +115,7 @@ async function refresh({ full = false } = {}) {
     onboardingSurfaceRestored = true;
   }
   syncWelcomeBackModal();
+  syncReviewPromptModal();
   resetLiveTickerBaseline();
   if (shouldAnimateOpeningGain) showCollectBurst(nextSnapshot.balanceGainSinceLastPopup);
   if (full || !lastRenderedRouteKey) {
@@ -155,6 +158,12 @@ function balanceRollValue() {
   return eased < 0.72 ? balanceRoll.from : balanceRoll.to;
 }
 
+function balanceRollAnimationDelay() {
+  if (!balanceRoll) return "0s";
+  const progress = Math.min(1, Math.max(0, (Date.now() - balanceRoll.startedAt) / balanceRoll.duration));
+  return `${-(progress * 0.82).toFixed(3)}s`;
+}
+
 function displayBalance() {
   return balanceRollValue() || liveBalance();
 }
@@ -177,15 +186,24 @@ function setText(field, value) {
 }
 
 function syncCollectBurstNode() {
+  const delay = collectBurstAnimationDelay();
   app.querySelectorAll("[data-field='collectBurst']").forEach((node) => {
     if (collectBurst && displaysAsPositiveMoney(collectBurst)) {
       node.textContent = `+${money(collectBurst)}`;
       node.hidden = false;
+      node.style.setProperty("--collect-burst-delay", delay);
     } else {
       node.textContent = "";
       node.hidden = true;
+      node.style.removeProperty("--collect-burst-delay");
     }
   });
+}
+
+function collectBurstAnimationDelay() {
+  if (!collectBurstStartedAt) return "0s";
+  const progress = Math.min(1, Math.max(0, (Date.now() - collectBurstStartedAt) / 1300));
+  return `${-(progress * 1.3).toFixed(3)}s`;
 }
 
 function setDisabled(selector, disabled) {
@@ -227,6 +245,11 @@ function syncWelcomeBackModal() {
   } else if (modal?.name === "welcomeBack") {
     modal = null;
   }
+}
+
+function syncReviewPromptModal() {
+  if (modal || !snapshot?.reviewPrompt?.eligible || !snapshot?.sync?.onboardingComplete) return;
+  modal = { name: "reviewPrompt", dontAskAgain: false };
 }
 
 function patchLibraryList() {
@@ -681,6 +704,9 @@ function shell(content, activeNav = "slots") {
   app.querySelectorAll("[data-notification-setting]").forEach((node) => {
     node.addEventListener("change", handleNotificationToggle);
   });
+  app.querySelectorAll("[data-display-setting]").forEach((node) => {
+    node.addEventListener("change", handleDisplayToggle);
+  });
   const searchNode = app.querySelector("[data-search]");
   if (searchNode) {
     searchNode.value = search;
@@ -709,6 +735,7 @@ function shell(content, activeNav = "slots") {
 
 function renderModal() {
   if (modal?.name === "welcomeBack") return renderWelcomeBackModal();
+  if (modal?.name === "reviewPrompt") return renderReviewPromptModal();
   if (modal?.name === "settings") return renderSettingsModal();
   if (modal?.name === "slotUpgradeList") return renderSlotUpgradeListModal();
   if (modal?.name === "slotUpgradeDetail") return renderSlotUpgradeDetailModal(modal.slotId);
@@ -788,6 +815,18 @@ function renderNotificationToggle(key, label) {
   `;
 }
 
+function renderDisplayToggle(key, label) {
+  const checked = snapshot?.sync?.[key] !== false;
+  return `
+    <label class="settings-toggle">
+      <span>
+        <strong>${label}</strong>
+      </span>
+      <input type="checkbox" data-display-setting="${key}" ${checked ? "checked" : ""}>
+    </label>
+  `;
+}
+
 function formatCloudSaveTime(value) {
   if (!value) return "NEVER";
   return new Date(value).toLocaleString([], {
@@ -816,7 +855,10 @@ function renderCloudSaveSection() {
 
 function renderFeedbackSection() {
   return `
-    <button class="btn settings-feedback" data-action="openFeedback">LEAVE FEEDBACK</button>
+    <div class="settings-link-actions">
+      <button class="btn settings-feedback" data-action="openReviewPage">REVIEW US</button>
+      <button class="btn settings-feedback" data-action="openFeedback">LEAVE FEEDBACK</button>
+    </div>
   `;
 }
 
@@ -832,6 +874,7 @@ function renderSettingsModal() {
             ${renderNotificationToggle("bigPayout", "Big payout")}
             ${renderNotificationToggle("streakRisk", "Streak at risk")}
           </div>
+          ${renderDisplayToggle("incomeBadgeEnabled", "Show income badge")}
         </div>
         ${renderCloudSaveSection()}
         ${renderFeedbackSection()}
@@ -1029,6 +1072,27 @@ function renderWelcomeBackModal() {
         </div>
         <div class="modal-actions single">
           <button class="btn btn-collect" data-action="collectWelcomeBack">COLLECT</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderReviewPromptModal() {
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="reviewPromptTitle">
+        <h2 id="reviewPromptTitle">ENJOYING BROWSER TYCOON?</h2>
+        <p>If the game has made your browser a little more fun, a quick review helps more players find it!</p>
+        <label class="settings-toggle review-checkbox">
+          <span>
+            <strong>Don't ask again</strong>
+          </span>
+          <input type="checkbox" data-action="reviewDontAsk" ${modal.dontAskAgain ? "checked" : ""}>
+        </label>
+        <div class="modal-actions">
+          <button class="btn btn-prestige" data-action="reviewLater">MAYBE LATER</button>
+          <button class="btn" data-action="leaveReview">LEAVE REVIEW</button>
         </div>
       </section>
     </div>
@@ -1289,8 +1353,8 @@ function renderHeader() {
     <header class="header">
       <div class="balance-container">
         <div class="balance-row">
-          <div class="balance${balanceRoll ? " balance-rolling" : ""}" data-field="balance">${money(displayBalance())}</div>
-          <div class="collect-burst" data-field="collectBurst" ${collectBurst ? "" : "hidden"}>${collectBurst ? `+${money(collectBurst)}` : ""}</div>
+          <div class="balance${balanceRoll ? " balance-rolling" : ""}" data-field="balance" style="--balance-roll-delay: ${balanceRollAnimationDelay()}">${money(displayBalance())}</div>
+          <div class="collect-burst" data-field="collectBurst" style="--collect-burst-delay: ${collectBurstAnimationDelay()}" ${collectBurst ? "" : "hidden"}>${collectBurst ? `+${money(collectBurst)}` : ""}</div>
         </div>
         <div class="income" data-field="income">+${money(liveIncomePerSecond)}/sec</div>
       </div>
@@ -2117,6 +2181,19 @@ async function handleNotificationToggle(event) {
   }
 }
 
+async function handleDisplayToggle(event) {
+  const node = event.currentTarget;
+  const key = node.dataset.displaySetting;
+  const result = await act("updateDisplaySettings", { settings: { [key]: node.checked } }, { silent: true });
+  if (result?.ok) {
+    snapshot.sync[key] = result[key];
+    modal = { name: "settings" };
+    render();
+  } else {
+    node.checked = !node.checked;
+  }
+}
+
 function renderDomainSummary(domain) {
   const entry = entryFor(domain);
   shell(`
@@ -2169,6 +2246,10 @@ async function handleAction(event) {
   if (action === "mode" && BUY_MODES.includes(node.dataset.mode)) buyMode = node.dataset.mode;
   if (action === "openDomain") await chrome.tabs.create({ url: `https://${node.dataset.domain}` });
   if (action === "openFeedback") await chrome.tabs.create({ url: FEEDBACK_FORM_URL });
+  if (action === "openReviewPage") {
+    await act("updateReviewPrompt", { action: "review", dontAskAgain: true }, { silent: true });
+    await chrome.tabs.create({ url: REVIEW_URL });
+  }
   if (action === "finishOnboarding") {
     const result = await act("setOnboardingStep", { step: "slot" });
     if (result?.ok) {
@@ -2255,6 +2336,19 @@ async function handleAction(event) {
   if (action === "tier") await act("upgradeSlotTier", { slotId: Number(node.dataset.slot) });
   if (action === "premiumPurchase") await act("openPremiumPayment");
   if (action === "premiumRestore") await act("openPremiumLogin");
+  if (action === "reviewDontAsk" && modal?.name === "reviewPrompt") {
+    modal.dontAskAgain = Boolean(node.checked);
+  }
+  if (action === "reviewLater" && modal?.name === "reviewPrompt") {
+    const dontAskAgain = Boolean(modal.dontAskAgain);
+    await act("updateReviewPrompt", { action: "later", dontAskAgain }, { silent: true });
+    modal = null;
+  }
+  if (action === "leaveReview" && modal?.name === "reviewPrompt") {
+    await act("updateReviewPrompt", { action: "review", dontAskAgain: true }, { silent: true });
+    modal = null;
+    await chrome.tabs.create({ url: REVIEW_URL });
+  }
   if (action === "onboardingNext") {
     const nextStep = node.dataset.step;
     if (nextStep === "complete") {
@@ -2370,11 +2464,13 @@ function showCollectBurst(amount) {
   const reward = toSci(amount);
   if (!displaysAsPositiveMoney(reward)) {
     collectBurst = null;
+    collectBurstStartedAt = 0;
     balanceRoll = null;
     syncCollectBurstNode();
     return;
   }
   collectBurst = reward;
+  collectBurstStartedAt = Date.now();
   const endBalance = liveBalance();
   const startBalance = sciSub(endBalance, reward);
   const shouldRollBalance = money(startBalance) !== money(endBalance);
@@ -2406,6 +2502,7 @@ function showCollectBurst(amount) {
   else balanceRollFrame = null;
   collectBurstTimer = setTimeout(() => {
     collectBurst = null;
+    collectBurstStartedAt = 0;
     balanceRoll = null;
     collectBurstTimer = null;
     syncCollectBurstNode();
@@ -2430,7 +2527,7 @@ async function act(type, payload = {}, options = {}) {
   else if (type === "openPremiumPayment") showToast("PAYMENT PAGE OPENED.");
   else if (type === "openPremiumLogin") showToast("RESTORE PAGE OPENED.");
   else if (type === "refreshPremiumStatus") showToast(result.paid ? "SUPPORTER CORE ACTIVE." : "NO PURCHASE FOUND.", result.paid ? "success" : "warning");
-  else if (type === "completeOnboarding" || type === "setOnboardingStep") {}
+  else if (type === "completeOnboarding" || type === "setOnboardingStep" || type === "updateReviewPrompt") {}
   else if (options.silent) {}
   else showToast("SUCCESS");
   const nextSnapshot = await send("snapshot");

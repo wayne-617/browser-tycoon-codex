@@ -56,6 +56,8 @@ const EVENT_BONUS_COOLDOWN_MS = 60 * 1000;
 const ONBOARDING_STARTER_CASH = 1000;
 const DOMAIN_LIBRARY_LIMIT = 100;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const REVIEW_PROMPT_LIFETIME_REQUIREMENT = 1000000;
+const REVIEW_PROMPT_COOLDOWN_MS = 14 * DAY_MS;
 const CLAIM_LOCKS = new Set();
 const NOTIFICATION_IDS = {
   vaultFull: "browser-tycoon:vault-full",
@@ -116,6 +118,7 @@ function defaultSyncState() {
     onboardingComplete: false,
     onboardingStep: "intro",
     onboardingStarterCashClaimed: false,
+    incomeBadgeEnabled: true,
     notificationSettings: null,
     slots: [1, 2, 3].map((id) => ({
       id,
@@ -152,6 +155,12 @@ function defaultLocalState() {
       lastBigPayoutCheckAt: 0,
       lastBigPayoutNotificationAt: 0,
       lastStreakRiskDate: null
+    },
+    reviewPrompt: {
+      lastShownAt: 0,
+      maybeLaterAt: 0,
+      reviewed: false,
+      dontAskAgain: false
     }
   };
 }
@@ -183,6 +192,15 @@ function normalizeNotificationState(state) {
   };
 }
 
+function normalizeReviewPromptState(state) {
+  return {
+    lastShownAt: Number(state?.lastShownAt || 0),
+    maybeLaterAt: Number(state?.maybeLaterAt || 0),
+    reviewed: Boolean(state?.reviewed),
+    dontAskAgain: Boolean(state?.dontAskAgain)
+  };
+}
+
 async function getState() {
   const syncRequest = {
     ...defaultSyncState(),
@@ -202,9 +220,11 @@ async function getState() {
   }
   if (!Number.isFinite(sync.cacheCredits)) sync.cacheCredits = 0;
   if (!Number.isFinite(sync.ccAlreadyClaimedFromLifetime)) sync.ccAlreadyClaimedFromLifetime = 0;
+  sync.incomeBadgeEnabled = sync.incomeBadgeEnabled !== false;
   sync.notificationSettings = normalizeNotificationSettings(syncRaw.notificationSettings ?? sync.notificationSettings, sync.onboardingComplete);
   sync.slots = normalizeSlots(sync.slots, sync.unlockedSlots);
   local.notificationState = normalizeNotificationState(local.notificationState);
+  local.reviewPrompt = normalizeReviewPromptState(local.reviewPrompt);
   local.redirectAliases = normalizeRedirectAliases(local.redirectAliases);
   normalizeCurrencyState(sync, local);
   return { sync, local };
@@ -223,6 +243,7 @@ function localStoragePayload(sync, local) {
       onboardingComplete: sync.onboardingComplete,
       onboardingStep: sync.onboardingStep,
       onboardingStarterCashClaimed: sync.onboardingStarterCashClaimed,
+      incomeBadgeEnabled: sync.incomeBadgeEnabled,
       slots: sync.slots,
       compactDomains: sync.compactDomains
     },
@@ -236,7 +257,8 @@ function localStoragePayload(sync, local) {
     lastPopupSeenAt: local.lastPopupSeenAt,
     lastPopupBalance: local.lastPopupBalance,
     pendingWelcomeBack: local.pendingWelcomeBack,
-    notificationState: local.notificationState
+    notificationState: local.notificationState,
+    reviewPrompt: local.reviewPrompt
   };
 }
 
@@ -887,6 +909,10 @@ async function settleAndSave({ rebuild = true } = {}) {
 }
 
 async function updateBadge(sync) {
+  if (sync?.incomeBadgeEnabled === false) {
+    await chrome.action.setBadgeText({ text: "" });
+    return;
+  }
   const local = await chrome.storage.local.get(defaultLocalState());
   normalizePremiumStatus(local);
   const cps = Math.max(0, Math.floor(currentIncomePerSecond(sync, local.domainLibrary || {}, local.presence || {}, supporterCoreMultiplier(local))));
@@ -1085,7 +1111,7 @@ function streakRiskDomains(sync, local, now) {
 async function notifyPlayer(id, title, message) {
   await chrome.notifications.create(id, {
     type: "basic",
-    iconUrl: "icons/Icon14_40.png",
+    iconUrl: "icons/b-logo-no-outline.png",
     title,
     message,
     priority: 1
@@ -1167,6 +1193,14 @@ function currentSlotIncomes(sync, library, presence, now = Date.now(), premiumMu
   }, {});
 }
 
+function reviewPromptEligible(sync, local, now = Date.now()) {
+  const state = normalizeReviewPromptState(local.reviewPrompt);
+  if (!sync.onboardingComplete || state.reviewed || state.dontAskAgain) return false;
+  if (sciCompare(sync.totalLifetimeEarned, REVIEW_PROMPT_LIFETIME_REQUIREMENT) < 0) return false;
+  const lastDeferredAt = Math.max(state.lastShownAt, state.maybeLaterAt);
+  return !lastDeferredAt || now - lastDeferredAt >= REVIEW_PROMPT_COOLDOWN_MS;
+}
+
 async function getSnapshot() {
   const { sync, local } = await settleAndSave();
   await refreshPremiumStatus(local);
@@ -1213,6 +1247,9 @@ async function getSnapshot() {
     welcomeBack,
     balanceGainSinceLastPopup,
     cloudSaveMeta,
+    reviewPrompt: {
+      eligible: reviewPromptEligible(sync, local, now)
+    },
     incomePerSecond: Object.values(slotIncomes).reduce((sum, value) => sum + value, 0),
     nextSlotCost: slotUnlockCost(sync.unlockedSlots + 1),
     today: TODAY(),
@@ -1557,6 +1594,28 @@ async function updateNotificationSettings(patch = {}) {
   return { ok: true, notificationSettings: sync.notificationSettings };
 }
 
+async function updateDisplaySettings(patch = {}) {
+  const { sync, local } = await getState();
+  if ("incomeBadgeEnabled" in (patch || {})) {
+    sync.incomeBadgeEnabled = Boolean(patch.incomeBadgeEnabled);
+  }
+  await saveState(sync, local);
+  await updateBadge(sync);
+  return { ok: true, incomeBadgeEnabled: sync.incomeBadgeEnabled };
+}
+
+async function updateReviewPrompt(action, { dontAskAgain = false } = {}) {
+  const { sync, local } = await getState();
+  local.reviewPrompt = normalizeReviewPromptState(local.reviewPrompt);
+  const now = Date.now();
+  local.reviewPrompt.lastShownAt = local.reviewPrompt.lastShownAt || now;
+  if (dontAskAgain) local.reviewPrompt.dontAskAgain = true;
+  if (action === "review") local.reviewPrompt.reviewed = true;
+  if (action === "later") local.reviewPrompt.maybeLaterAt = now;
+  await saveState(sync, local);
+  return { ok: true, reviewPrompt: local.reviewPrompt };
+}
+
 function trackNavigationStart(details) {
   if (details.frameId !== 0 || details.tabId < 0) return;
   const domain = normalizeDomainFromUrl(details.url);
@@ -1717,6 +1776,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "openPremiumLogin") return openPremiumLogin();
       if (message.type === "refreshPremiumStatus") return forceRefreshPremiumStatus();
       if (message.type === "updateNotificationSettings") return updateNotificationSettings(message.settings);
+      if (message.type === "updateDisplaySettings") return updateDisplaySettings(message.settings);
+      if (message.type === "updateReviewPrompt") return updateReviewPrompt(message.action, {
+        dontAskAgain: Boolean(message.dontAskAgain)
+      });
       if (message.type === "syncCloudSave") return syncCloudSave();
       if (message.type === "loadCloudSave") return loadCloudSave();
       if (message.type === "completeOnboarding") {

@@ -2,7 +2,7 @@
 
 ## Listing
 
-- Version: `1.0.1`
+- Version: `1.0.2`
 - Single purpose: Turn normal browsing activity on player-selected domains into progress in an idle tycoon game.
 - Support URL: `https://github.com/wayne-617/browser-tycoon-codex`
 - Privacy policy: `https://wayne-617.github.io/browser-tycoon-codex/privacy.html`

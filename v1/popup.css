@@ -114,6 +114,7 @@ body {
 
 .balance-rolling {
   animation: balance-roll-pop 0.82s ease-out;
+  animation-delay: var(--balance-roll-delay, 0s);
 }
 
 .balance-rolling::after {
@@ -126,6 +127,7 @@ body {
   opacity: 0;
   pointer-events: none;
   animation: balance-roll-glow 0.82s ease-out;
+  animation-delay: var(--balance-roll-delay, 0s);
 }
 
 .collect-burst {
@@ -134,6 +136,7 @@ body {
   line-height: 1;
   text-shadow: 0 0 8px rgba(0, 255, 102, 0.45);
   animation: collect-burst-fade 1.3s ease forwards;
+  animation-delay: var(--collect-burst-delay, 0s);
   white-space: nowrap;
 }
 
@@ -1567,6 +1570,31 @@ body {
   flex: 0 0 auto;
 }
 
+.review-checkbox {
+  border: 0;
+  background: transparent;
+  justify-content: center;
+  gap: 7px;
+  margin: 16px 0 10px;
+  padding: 2px 0;
+  text-align: center;
+}
+
+.review-checkbox span {
+  display: block;
+}
+
+.review-checkbox strong {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.review-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--text-muted);
+}
+
 .settings-cloud {
   border: 1px solid rgba(0, 240, 255, 0.28);
   background: rgba(0, 240, 255, 0.035);
@@ -1598,14 +1626,21 @@ body {
   gap: 8px;
 }
 
+.settings-link-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
 .settings-feedback {
   width: 100%;
   border-color: var(--warning);
   background: rgba(255, 209, 102, 0.04);
   color: var(--warning);
-  padding: 10px;
-  margin: 0 0 12px;
-  font-size: 20px;
+  padding: 10px 6px;
+  margin: 0;
+  font-size: 18px;
 }
 
 .settings-feedback:hover {
