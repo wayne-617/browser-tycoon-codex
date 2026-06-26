@@ -20,12 +20,14 @@ let lastRenderedRouteKey = "";
 let toastTimer = null;
 let modal = null;
 let collectBurst = null;
+let collectBurstStartedAt = 0;
 let collectBurstTimer = null;
 let balanceRoll = null;
 let balanceRollFrame = null;
 let onboardingSurfaceRestored = false;
 
 const FEEDBACK_FORM_URL = "https://forms.gle/GP8nFvBRYaw4nWds5";
+const REVIEW_URL = "https://chromewebstore.google.com/detail/bkioklcimaadbkfceagmkadfffpghhkd?utm_source=item-share-cb";
 const iconPath = (index) => `icons/Icon14_${String(index).padStart(2, "0")}.png`;
 const BUY_MODES = ["1", "10"];
 const {
@@ -113,6 +115,7 @@ async function refresh({ full = false } = {}) {
     onboardingSurfaceRestored = true;
   }
   syncWelcomeBackModal();
+  syncReviewPromptModal();
   resetLiveTickerBaseline();
   if (shouldAnimateOpeningGain) showCollectBurst(nextSnapshot.balanceGainSinceLastPopup);
   if (full || !lastRenderedRouteKey) {
@@ -155,6 +158,12 @@ function balanceRollValue() {
   return eased < 0.72 ? balanceRoll.from : balanceRoll.to;
 }
 
+function balanceRollAnimationDelay() {
+  if (!balanceRoll) return "0s";
+  const progress = Math.min(1, Math.max(0, (Date.now() - balanceRoll.startedAt) / balanceRoll.duration));
+  return `${-(progress * 0.82).toFixed(3)}s`;
+}
+
 function displayBalance() {
   return balanceRollValue() || liveBalance();
 }
@@ -177,15 +186,24 @@ function setText(field, value) {
 }
 
 function syncCollectBurstNode() {
+  const delay = collectBurstAnimationDelay();
   app.querySelectorAll("[data-field='collectBurst']").forEach((node) => {
     if (collectBurst && displaysAsPositiveMoney(collectBurst)) {
       node.textContent = `+${money(collectBurst)}`;
       node.hidden = false;
+      node.style.setProperty("--collect-burst-delay", delay);
     } else {
       node.textContent = "";
       node.hidden = true;
+      node.style.removeProperty("--collect-burst-delay");
     }
   });
+}
+
+function collectBurstAnimationDelay() {
+  if (!collectBurstStartedAt) return "0s";
+  const progress = Math.min(1, Math.max(0, (Date.now() - collectBurstStartedAt) / 1300));
+  return `${-(progress * 1.3).toFixed(3)}s`;
 }
 
 function setDisabled(selector, disabled) {
@@ -229,6 +247,11 @@ function syncWelcomeBackModal() {
   }
 }
 
+function syncReviewPromptModal() {
+  if (modal || !snapshot?.reviewPrompt?.eligible || !snapshot?.sync?.onboardingComplete) return;
+  modal = { name: "reviewPrompt", dontAskAgain: false };
+}
+
 function patchLibraryList() {
   if (!["library", "picker"].includes(route.name)) return;
   const list = app.querySelector("[data-library-list]");
@@ -241,6 +264,7 @@ function patchLibraryList() {
   list.querySelectorAll("[data-action]").forEach((node) => {
     node.addEventListener("click", handleAction);
   });
+  bindFaviconFallbacks(list);
 }
 
 function patchSlots() {
@@ -272,14 +296,23 @@ function patchDetail() {
   const entry = entryFor(domain);
   if (!entry) return;
   const state = stateLabel(domain);
+  const cap = vaultCap(entry);
+  const vaultPercent = vaultProgressPercent(entry.vaultAmount, cap);
   setText("detailVault", money(entry.vaultAmount));
-  setText("detailVaultCap", money(vaultCap(entry)));
+  setText("detailVaultCap", money(cap));
   setText("detailVaultRate", `${money(vaultRate(entry))}/sec`);
+  setText("detailVaultPercent", `${Math.floor(vaultPercent)}%`);
+  const vaultProgress = app.querySelector('[data-field="detailVaultProgress"]');
+  if (vaultProgress) vaultProgress.style.width = `${vaultPercent}%`;
+  const vaultTrack = app.querySelector('[data-field="detailVaultTrack"]');
+  if (vaultTrack) {
+    vaultTrack.classList.toggle("is-full", vaultPercent >= 100);
+    vaultTrack.setAttribute("aria-valuenow", String(Math.floor(vaultPercent)));
+  }
   setText("detailState", state.text);
   setText("detailIncome", `${money(incomeFor(domain))}/sec`);
   setText("detailBaseIncome", `${money(domainBaseRate(entry))}/sec`);
   const slot = currentSlot(domain);
-  setText("detailSlotTier", slotTierLabel(slot?.tier || 0));
   setText("detailSlotMultiplier", `x${tierBonus(slot).toFixed(2)}`);
   const rank = masteryRank(entry);
   const mastery = masteryProgress(entry);
@@ -345,6 +378,17 @@ function money(value) {
 
 function displaysAsPositiveMoney(value) {
   return money(value) !== "$0.00";
+}
+
+function vaultProgressPercent(value, cap) {
+  const current = toSci(value);
+  const maximum = toSci(cap);
+  if (current.m <= 0 || maximum.m <= 0) return 0;
+  if (sciCompare(current, maximum) >= 0) return 100;
+  const exponentDelta = current.e - maximum.e;
+  if (exponentDelta < -16) return 0;
+  const ratio = (current.m / maximum.m) * Math.pow(10, exponentDelta);
+  return Math.max(0, Math.min(100, ratio * 100));
 }
 
 function cc(value) {
@@ -612,12 +656,33 @@ function vaultTooltip(entry) {
   return `Vault fill = vault base (${money(BASE_RATE * 0.02)}/sec) x Cache Core ${cache} x vault traffic ${traffic} x Vault Pump ${pump} x Mastery ${masteryIncome}${supporter}. Vault cap = global base (${money(BASE_RATE)}/sec) x Cache Core ${cache} x 25 minutes x vault traffic ${traffic} x Cold Storage ${storage} x Mastery ${masteryCap}${supporter}. Collected vault pays the stored amount.`;
 }
 
-function favicon(domain, className = "slot-icon") {
-  const pageUrl = domain.startsWith("http://") || domain.startsWith("https://") ? domain : `https://${domain}/`;
+function faviconPageUrl(source) {
+  const domain = typeof source === "string" ? source : source?.domain;
+  const hint = typeof source === "string" ? null : source?.faviconPageUrl;
+  try {
+    const parsed = new URL(hint || "");
+    if (["http:", "https:"].includes(parsed.protocol) && parsed.hostname) return `${parsed.protocol}//${parsed.hostname.toLowerCase()}/`;
+  } catch {}
+  const normalized = String(domain || "").trim().toLowerCase().replace(/^www\./, "");
+  const host = normalized.split(".").length === 2 ? `www.${normalized}` : normalized;
+  return `https://${host}/`;
+}
+
+function favicon(source, className = "slot-icon") {
+  const pageUrl = faviconPageUrl(source);
   const url = new URL(chrome.runtime.getURL("/_favicon/"));
   url.searchParams.set("pageUrl", pageUrl);
   url.searchParams.set("size", "64");
-  return `<img class="${className}" src="${url.toString()}" alt="" onerror="this.src='${iconPath(1)}'">`;
+  return `<img class="${className}" src="${url.toString()}" alt="" data-favicon-fallback>`;
+}
+
+function bindFaviconFallbacks(root = app) {
+  root.querySelectorAll("[data-favicon-fallback]").forEach((node) => {
+    node.addEventListener("error", () => {
+      node.removeAttribute("data-favicon-fallback");
+      node.src = iconPath(1);
+    }, { once: true });
+  });
 }
 
 function shell(content, activeNav = "slots") {
@@ -635,8 +700,12 @@ function shell(content, activeNav = "slots") {
   app.querySelectorAll("[data-action]").forEach((node) => {
     node.addEventListener("click", handleAction);
   });
+  bindFaviconFallbacks();
   app.querySelectorAll("[data-notification-setting]").forEach((node) => {
     node.addEventListener("change", handleNotificationToggle);
+  });
+  app.querySelectorAll("[data-display-setting]").forEach((node) => {
+    node.addEventListener("change", handleDisplayToggle);
   });
   const searchNode = app.querySelector("[data-search]");
   if (searchNode) {
@@ -666,6 +735,7 @@ function shell(content, activeNav = "slots") {
 
 function renderModal() {
   if (modal?.name === "welcomeBack") return renderWelcomeBackModal();
+  if (modal?.name === "reviewPrompt") return renderReviewPromptModal();
   if (modal?.name === "settings") return renderSettingsModal();
   if (modal?.name === "slotUpgradeList") return renderSlotUpgradeListModal();
   if (modal?.name === "slotUpgradeDetail") return renderSlotUpgradeDetailModal(modal.slotId);
@@ -674,7 +744,6 @@ function renderModal() {
   if (modal?.name === "cacheCore") return renderCacheCoreModal();
   if (modal?.name === "confirm") return renderConfirmModal();
   if (modal?.name === "domainManage") return renderDomainManageModal(modal.slotId);
-  if (modal?.name === "devInput") return renderDevInputModal();
   if (modal !== "prestige") return "";
   const award = prestigeAwardEstimate();
   const resetTutorialStep = onboardingStep() === "resetProgress";
@@ -746,6 +815,18 @@ function renderNotificationToggle(key, label) {
   `;
 }
 
+function renderDisplayToggle(key, label) {
+  const checked = snapshot?.sync?.[key] !== false;
+  return `
+    <label class="settings-toggle">
+      <span>
+        <strong>${label}</strong>
+      </span>
+      <input type="checkbox" data-display-setting="${key}" ${checked ? "checked" : ""}>
+    </label>
+  `;
+}
+
 function formatCloudSaveTime(value) {
   if (!value) return "NEVER";
   return new Date(value).toLocaleString([], {
@@ -774,7 +855,10 @@ function renderCloudSaveSection() {
 
 function renderFeedbackSection() {
   return `
-    <button class="btn settings-feedback" data-action="openFeedback">LEAVE FEEDBACK</button>
+    <div class="settings-link-actions">
+      <button class="btn settings-feedback" data-action="openReviewPage">REVIEW US</button>
+      <button class="btn settings-feedback" data-action="openFeedback">LEAVE FEEDBACK</button>
+    </div>
   `;
 }
 
@@ -790,6 +874,7 @@ function renderSettingsModal() {
             ${renderNotificationToggle("bigPayout", "Big payout")}
             ${renderNotificationToggle("streakRisk", "Streak at risk")}
           </div>
+          ${renderDisplayToggle("incomeBadgeEnabled", "Show income badge")}
         </div>
         ${renderCloudSaveSection()}
         ${renderFeedbackSection()}
@@ -993,6 +1078,27 @@ function renderWelcomeBackModal() {
   `;
 }
 
+function renderReviewPromptModal() {
+  return `
+    <div class="modal-scrim" role="presentation">
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="reviewPromptTitle">
+        <h2 id="reviewPromptTitle">ENJOYING BROWSER TYCOON?</h2>
+        <p>If the game has made your browser a little more fun, a quick review helps more players find it!</p>
+        <label class="settings-toggle review-checkbox">
+          <span>
+            <strong>Don't ask again</strong>
+          </span>
+          <input type="checkbox" data-action="reviewDontAsk" ${modal.dontAskAgain ? "checked" : ""}>
+        </label>
+        <div class="modal-actions">
+          <button class="btn btn-prestige" data-action="reviewLater">MAYBE LATER</button>
+          <button class="btn" data-action="leaveReview">LEAVE REVIEW</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function renderDomainManageModal(slotId) {
   const slot = snapshot.sync.slots.find((item) => item.id === Number(slotId));
   if (!slot) return "";
@@ -1012,25 +1118,6 @@ function renderDomainManageModal(slotId) {
         </div>
         <div class="modal-actions single">
           <button class="btn" data-action="cancelModal">CLOSE</button>
-        </div>
-      </section>
-    </div>
-  `;
-}
-
-function renderDevInputModal() {
-  return `
-    <div class="modal-scrim" role="presentation">
-      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="devInputTitle">
-        <div class="modal-kicker">DEV TOOLS</div>
-        <h2 id="devInputTitle">${modal.title}</h2>
-        <p>${modal.body}</p>
-        <div style="margin: 12px 0;">
-          <input class="input-text" data-dev-input type="number" placeholder="Enter amount" style="width: 100%; text-align: center;">
-        </div>
-        <div class="modal-actions">
-          <button class="btn" data-action="cancelModal">CANCEL</button>
-          <button class="btn btn-prestige" data-action="devInputConfirm">ADD</button>
         </div>
       </section>
     </div>
@@ -1266,8 +1353,8 @@ function renderHeader() {
     <header class="header">
       <div class="balance-container">
         <div class="balance-row">
-          <div class="balance${balanceRoll ? " balance-rolling" : ""}" data-field="balance">${money(displayBalance())}</div>
-          <div class="collect-burst" data-field="collectBurst" ${collectBurst ? "" : "hidden"}>${collectBurst ? `+${money(collectBurst)}` : ""}</div>
+          <div class="balance${balanceRoll ? " balance-rolling" : ""}" data-field="balance" style="--balance-roll-delay: ${balanceRollAnimationDelay()}">${money(displayBalance())}</div>
+          <div class="collect-burst" data-field="collectBurst" style="--collect-burst-delay: ${collectBurstAnimationDelay()}" ${collectBurst ? "" : "hidden"}>${collectBurst ? `+${money(collectBurst)}` : ""}</div>
         </div>
         <div class="income" data-field="income">+${money(liveIncomePerSecond)}/sec</div>
       </div>
@@ -1300,62 +1387,8 @@ function renderStore() {
       ${renderSlotUpgradeStoreItem()}
       <div class="upgrade-section-label" style="margin-top:20px;">PREMIUM STORE</div>
       ${renderSupporterCoreStoreItem()}
-      <div class="upgrade-section-label" style="margin-top:20px;">DEV TOOLS</div>
-      <div class="dev-controls">
-        <button class="btn" data-action="devCustomCash">DEV +$</button>
-        <button class="btn btn-prestige" data-action="devCustomCC">DEV +CC</button>
-        <button class="btn" data-action="devReplayTutorial">DEV TUTORIAL</button>
-        <button class="btn btn-danger" data-action="devReset">DEV RESET $/CC</button>
-        <button class="btn btn-danger" data-action="devResetLifetime">DEV RESET LIFETIME</button>
-      </div>
-      ${renderDevSlotBorderSamples()}
     </main>
   `, "store");
-}
-
-function renderDevSlotBorderSamples() {
-  return `
-    <div class="dev-border-samples" aria-label="Slot border rank samples">
-      <div class="dev-border-label">NEW RANK BORDERS</div>
-      ${[1, 2, 3, 4, 5].map((tier) => `
-        <div class="slot rank-sample ${tierClass(tier)}">
-          <div class="slot-info">
-            <img class="slot-icon" src="${iconPath(12 + tier)}" alt="">
-            <div>
-              <div class="slot-domain">${tierMaterial(tier)}</div>
-              <div class="slot-tier">Rank ${tierName(tier)} border sample</div>
-            </div>
-          </div>
-          <div class="slot-badges">
-            <div class="slot-streak active">
-              <span class="slot-fire">⚡</span>
-              <span>${tier}</span>
-            </div>
-            <div class="slot-vault-ready">FULL</div>
-          </div>
-        </div>
-      `).join("")}
-      <div class="dev-border-label">ORIGINAL BORDERS</div>
-      ${[1, 2, 3, 4, 5].map((tier) => `
-        <div class="slot rank-sample original-rank-sample original-${tierClass(tier)}">
-          <div class="slot-info">
-            <img class="slot-icon" src="${iconPath(12 + tier)}" alt="">
-            <div>
-              <div class="slot-domain">${tierMaterial(tier)}</div>
-              <div class="slot-tier">Original rank ${tierName(tier)}</div>
-            </div>
-          </div>
-          <div class="slot-badges">
-            <div class="slot-streak active">
-              <span class="slot-fire">⚡</span>
-              <span>${tier}</span>
-            </div>
-            <div class="slot-vault-ready">FULL</div>
-          </div>
-        </div>
-      `).join("")}
-    </div>
-  `;
 }
 
 function renderSupporterCoreStoreItem() {
@@ -1464,7 +1497,7 @@ function renderSlot(slot) {
   return `
     <button class="slot ${tierClass(slot.tier)}${slotTutorial ? " tutorial-target" : ""}" data-action="${slotTutorial ? "picker" : "detail"}" data-slot="${slot.id}" data-domain="${domain}">
       <div class="slot-info">
-        ${favicon(domain)}
+        ${favicon(entry || domain)}
         <div>
           <div class="slot-domain">${domain} <span class="slot-state ${state.className}" data-field="slot:${domain}:state">${state.text}</span></div>
           <div class="slot-tier">${slotTierLabel(slot.tier)} | <span data-field="slot:${domain}:income">${money(incomeFor(domain))}</span>/s | VAULT <span data-field="slot:${domain}:vault">${money(entry?.vaultAmount || 0)}</span></div>
@@ -1572,6 +1605,8 @@ function renderDetail(domain) {
   }
   if (!BUY_MODES.includes(buyMode)) buyMode = "1";
   const state = stateLabel(domain);
+  const detailVaultCap = vaultCap(entry);
+  const detailVaultPercent = vaultProgressPercent(entry.vaultAmount, detailVaultCap);
 
   const currentOnboardingStep = onboardingStep();
   const isDashboard = detailTab === "dashboard";
@@ -1588,19 +1623,27 @@ function renderDetail(domain) {
             <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(currentRateTooltip(domain, entry, slot))}">?</span>
           </div>
           <small>BASE INCOME: <span data-field="detailBaseIncome">${money(domainBaseRate(entry))}/sec</span></small>
-          <small>SLOT TIER: <span data-field="detailSlotTier">${slotTierLabel(slot.tier)}</span></small>
           <small>SLOT MULTIPLIER: <span data-field="detailSlotMultiplier">x${tierBonus(slot).toFixed(2)}</span></small>
           ${supporterCorePaid() ? `<small>SUPPORTER CORE: <span data-field="detailSupporterCore">x${supporterCoreMultiplier().toFixed(2)} ACTIVE</span></small>` : ""}
           <small>STREAK: <span data-field="detailStreak">${displayStreak(entry)}</span> | LAST VISIT: <span data-field="detailLastVisit">${dateAgo(entry.lastVisited)}</span></small>
         </div>
         <button class="btn btn-detail" data-action="domainDetails" data-domain="${domain}">DETAILS</button>
       </div>
-      <div class="vault-panel${isVaultOnboardingStep() ? " tutorial-target tutorial-target-panel tutorial-highlight-only" : ""}">
-        <div class="vault-info">
-          <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
-          <small>CAP: <span data-field="detailVaultCap">${money(vaultCap(entry))}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span> <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(vaultTooltip(entry))}">?</span></small>
+      <div class="vault-panel vault-panel-progress${isVaultOnboardingStep() ? " tutorial-target tutorial-target-panel tutorial-highlight-only" : ""}">
+        <div class="vault-main-row">
+          <div class="vault-info">
+            <div>VAULT: <span data-field="detailVault">${money(entry.vaultAmount)}</span></div>
+            <small>CAP: <span data-field="detailVaultCap">${money(detailVaultCap)}</span> | FILL: <span data-field="detailVaultRate">${money(vaultRate(entry))}/sec</span> <span class="help-icon help-icon-muted" data-tooltip="${escapeAttribute(vaultTooltip(entry))}">?</span></small>
+          </div>
+          <button class="btn btn-collect" data-action="claim" data-domain="${domain}" ${sciCompare(entry.vaultAmount, 0) > 0 ? "" : "disabled"}>COLLECT</button>
         </div>
-        <button class="btn btn-collect" data-action="claim" data-domain="${domain}" ${sciCompare(entry.vaultAmount, 0) > 0 ? "" : "disabled"}>COLLECT</button>
+        <div class="vault-progress-meta">
+          <span>STORAGE</span>
+          <span data-field="detailVaultPercent">${Math.floor(detailVaultPercent)}%</span>
+        </div>
+        <div class="vault-progress-track${detailVaultPercent >= 100 ? " is-full" : ""}" data-field="detailVaultTrack" role="progressbar" aria-label="Vault storage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(detailVaultPercent)}">
+          <div class="vault-progress-fill" data-field="detailVaultProgress" style="width:${detailVaultPercent}%"></div>
+        </div>
       </div>
       ${renderMasteryPanel(entry)}
     `;
@@ -1631,7 +1674,7 @@ function renderDetail(domain) {
       <div class="view-header">
         <button class="btn btn-back" data-action="home">&lt; BACK</button>
         <div class="detail-domain-heading">
-          ${favicon(domain, "detail-favicon")}
+          ${favicon(entry || domain, "detail-favicon")}
           <span class="detail-title">${domain.toUpperCase()}</span>
           <button class="btn btn-icon" data-action="openDomain" data-domain="${domain}" aria-label="Open ${domain} in a new tab">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2112,7 +2155,7 @@ function renderLibraryItem(entry, pickSlotId) {
   return `
     <div class="library-item">
       <div class="slot-info" ${pickSlotId ? "" : `data-action="domainDetails" data-domain="${entry.domain}" data-source="library"`}>
-        ${favicon(entry.domain)}
+        ${favicon(entry)}
         <div>
           <div class="slot-domain">${entry.domain}</div>
           <div class="slot-tier">${isSlotted ? `SLOT ${entry.slotId}` : "LIBRARY"} | ${upgradeTotal} UPGRADES | ${money(entry.lifetimeEarned)}${masteryLabel}</div>
@@ -2131,6 +2174,19 @@ async function handleNotificationToggle(event) {
   const result = await act("updateNotificationSettings", { settings: { [key]: node.checked } }, { silent: true });
   if (result?.ok) {
     snapshot.sync.notificationSettings = result.notificationSettings;
+    modal = { name: "settings" };
+    render();
+  } else {
+    node.checked = !node.checked;
+  }
+}
+
+async function handleDisplayToggle(event) {
+  const node = event.currentTarget;
+  const key = node.dataset.displaySetting;
+  const result = await act("updateDisplaySettings", { settings: { [key]: node.checked } }, { silent: true });
+  if (result?.ok) {
+    snapshot.sync[key] = result[key];
     modal = { name: "settings" };
     render();
   } else {
@@ -2190,6 +2246,10 @@ async function handleAction(event) {
   if (action === "mode" && BUY_MODES.includes(node.dataset.mode)) buyMode = node.dataset.mode;
   if (action === "openDomain") await chrome.tabs.create({ url: `https://${node.dataset.domain}` });
   if (action === "openFeedback") await chrome.tabs.create({ url: FEEDBACK_FORM_URL });
+  if (action === "openReviewPage") {
+    await act("updateReviewPrompt", { action: "review", dontAskAgain: true }, { silent: true });
+    await chrome.tabs.create({ url: REVIEW_URL });
+  }
   if (action === "finishOnboarding") {
     const result = await act("setOnboardingStep", { step: "slot" });
     if (result?.ok) {
@@ -2214,7 +2274,8 @@ async function handleAction(event) {
       slotId,
       domain: input?.value || "",
       fromCurrentSite: Boolean(snapshot.currentSite?.valid),
-      currentDomain: snapshot.currentSite?.domain || ""
+      currentDomain: snapshot.currentSite?.domain || "",
+      faviconPageUrl: snapshot.currentSite?.faviconPageUrl || ""
     }, { silent: completingOnboarding });
     if (result?.ok) {
       if (completingOnboarding) await act("setOnboardingStep", { step: "dashboardEarning" });
@@ -2235,7 +2296,8 @@ async function handleAction(event) {
         slotId,
         domain: node.dataset.domain,
         fromCurrentSite: Boolean(snapshot.currentSite?.valid),
-        currentDomain: snapshot.currentSite?.domain || ""
+        currentDomain: snapshot.currentSite?.domain || "",
+        faviconPageUrl: snapshot.currentSite?.faviconPageUrl || ""
       },
       after: { routeAssignedSlot: slotId, onboardingStep: completingOnboarding ? "dashboardEarning" : null },
       silent: completingOnboarding
@@ -2274,16 +2336,18 @@ async function handleAction(event) {
   if (action === "tier") await act("upgradeSlotTier", { slotId: Number(node.dataset.slot) });
   if (action === "premiumPurchase") await act("openPremiumPayment");
   if (action === "premiumRestore") await act("openPremiumLogin");
-  if (action === "devCustomCash") modal = { name: "devInput", title: "ADD CASH", body: "Enter a custom dollar amount to add.", actionType: "devAddCash" };
-  if (action === "devCustomCC") modal = { name: "devInput", title: "ADD CACHE CREDITS", body: "Enter a custom CC amount to add.", actionType: "devAddCachePoints" };
-  if (action === "devReplayTutorial") {
-    const result = await act("resetOnboarding");
-    if (result?.ok) {
-      snapshot.sync.onboardingComplete = false;
-      snapshot.sync.onboardingStep = "intro";
-      modal = null;
-      route = { name: "home" };
-    }
+  if (action === "reviewDontAsk" && modal?.name === "reviewPrompt") {
+    modal.dontAskAgain = Boolean(node.checked);
+  }
+  if (action === "reviewLater" && modal?.name === "reviewPrompt") {
+    const dontAskAgain = Boolean(modal.dontAskAgain);
+    await act("updateReviewPrompt", { action: "later", dontAskAgain }, { silent: true });
+    modal = null;
+  }
+  if (action === "leaveReview" && modal?.name === "reviewPrompt") {
+    await act("updateReviewPrompt", { action: "review", dontAskAgain: true }, { silent: true });
+    modal = null;
+    await chrome.tabs.create({ url: REVIEW_URL });
   }
   if (action === "onboardingNext") {
     const nextStep = node.dataset.step;
@@ -2294,39 +2358,6 @@ async function handleAction(event) {
       const result = await act("setOnboardingStep", { step: nextStep });
       if (result?.ok) snapshot.sync.onboardingStep = nextStep;
     }
-  }
-  if (action === "devInputConfirm" && modal?.name === "devInput") {
-    const input = app.querySelector("[data-dev-input]");
-    const amount = Number(input?.value || 0);
-    if (amount > 0) {
-      const pending = modal;
-      modal = null;
-      await act(pending.actionType, { amount });
-    } else {
-      showToast("Enter a positive number.", "warning");
-    }
-  }
-  if (action === "devReset") {
-    modal = {
-      name: "confirm",
-      variant: "danger",
-      kicker: "DEV RESET",
-      title: "RESET CASH + CC?",
-      body: "This resets only current cash and Cache Credits. Domain history and slots stay intact.",
-      confirmLabel: "RESET",
-      actionType: "devResetCashAndCachePoints"
-    };
-  }
-  if (action === "devResetLifetime") {
-    modal = {
-      name: "confirm",
-      variant: "danger",
-      kicker: "DEV RESET",
-      title: "RESET LIFETIME EARNINGS?",
-      body: "This zeroes out total lifetime earned, domain lifetime, mastery lifetime, and mastery ranks. CC already claimed from lifetime is also reset.",
-      confirmLabel: "RESET",
-      actionType: "devResetLifetime"
-    };
   }
   if (action === "remove") {
     modal = {
@@ -2433,11 +2464,13 @@ function showCollectBurst(amount) {
   const reward = toSci(amount);
   if (!displaysAsPositiveMoney(reward)) {
     collectBurst = null;
+    collectBurstStartedAt = 0;
     balanceRoll = null;
     syncCollectBurstNode();
     return;
   }
   collectBurst = reward;
+  collectBurstStartedAt = Date.now();
   const endBalance = liveBalance();
   const startBalance = sciSub(endBalance, reward);
   const shouldRollBalance = money(startBalance) !== money(endBalance);
@@ -2469,6 +2502,7 @@ function showCollectBurst(amount) {
   else balanceRollFrame = null;
   collectBurstTimer = setTimeout(() => {
     collectBurst = null;
+    collectBurstStartedAt = 0;
     balanceRoll = null;
     collectBurstTimer = null;
     syncCollectBurstNode();
@@ -2493,7 +2527,7 @@ async function act(type, payload = {}, options = {}) {
   else if (type === "openPremiumPayment") showToast("PAYMENT PAGE OPENED.");
   else if (type === "openPremiumLogin") showToast("RESTORE PAGE OPENED.");
   else if (type === "refreshPremiumStatus") showToast(result.paid ? "SUPPORTER CORE ACTIVE." : "NO PURCHASE FOUND.", result.paid ? "success" : "warning");
-  else if (type === "completeOnboarding" || type === "resetOnboarding" || type === "setOnboardingStep") {}
+  else if (type === "completeOnboarding" || type === "setOnboardingStep" || type === "updateReviewPrompt") {}
   else if (options.silent) {}
   else showToast("SUCCESS");
   const nextSnapshot = await send("snapshot");
@@ -2505,9 +2539,6 @@ async function act(type, payload = {}, options = {}) {
   }
   if (type === "completeOnboarding" && Number(result.starterCash || 0) > 0) {
     showCollectBurst(result.starterCash);
-  }
-  if (type === "devAddCash" && Number(result.amount || 0) > 0) {
-    showCollectBurst(result.amount);
   }
   return result;
 }

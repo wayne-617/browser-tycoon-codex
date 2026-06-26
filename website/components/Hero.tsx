@@ -1,6 +1,7 @@
 import Image from "next/image";
 import { CTAButton } from "./CTAButton";
 import { ChromeIcon } from "./Icons";
+import { CHROME_WEB_STORE_URL } from "../lib/links";
 
 export function Hero() {
   return (
@@ -20,9 +21,8 @@ export function Hero() {
           <h1>Build. Optimize. <span>Dominate.</span></h1>
           <p>Start with a blank browser and build a tech empire.<br />Research, design, and conquer the web.</p>
         </div>
-        <div className="cta-row mt-6 flex w-full max-w-[620px] flex-col justify-center gap-4 sm:flex-row">
-          <CTAButton tone="magenta" suffix={<b className="cta-arrow">&gt;</b>}>PLAY NOW</CTAButton>
-          <CTAButton tone="cyan" icon={<ChromeIcon />}>ADD TO CHROME</CTAButton>
+        <div className="cta-row mt-6 flex w-full max-w-[330px] justify-center">
+          <CTAButton tone="cyan" href={CHROME_WEB_STORE_URL} icon={<ChromeIcon />}>ADD TO CHROME</CTAButton>
         </div>
         <p className="free-note mt-4"><span>*</span> Free to play. No signup required.</p>
       </div>

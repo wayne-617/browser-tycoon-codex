@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { renderMarketingPage } from "./template.mjs";
 
@@ -12,6 +14,8 @@ const DEFAULT_PRESET = path.join(__dirname, "presets", "mid-game.json");
 const DEFAULT_OUTPUT_DIR = path.join(__dirname, "output");
 const POPUP_WIDTH = 380;
 const POPUP_HEIGHT = 580;
+const DEFAULT_VIDEO_SECONDS = 3;
+const VIDEO_FPS = 15;
 
 function parseArgs(argv) {
   const args = {};
@@ -66,7 +70,18 @@ function faviconSources(domain) {
   if (!cleaned) return [];
   const encodedDomain = encodeURIComponent(cleaned);
   const encodedPage = encodeURIComponent(`https://${cleaned}`);
+  const overrides = {
+    "mail.google.com": [
+      "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico",
+      "https://www.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"
+    ],
+    "claude.ai": [
+      "https://claude.ai/favicon.ico",
+      "https://claude.ai/favicon-32x32.png"
+    ]
+  };
   return [
+    ...(overrides[cleaned] || []),
     `https://${cleaned}/favicon.ico`,
     `https://www.google.com/s2/favicons?sz=64&domain_url=${encodedPage}`,
     `https://www.google.com/s2/favicons?sz=64&domain=${encodedDomain}`,
@@ -133,7 +148,7 @@ async function hydrateFavicons(config, outputDir) {
   const cacheDir = path.join(outputDir, "favicon-cache");
   await mkdir(cacheDir, { recursive: true });
   const iconUrls = new Map();
-  const domains = uniqueItems((config.slots || []).map((slot) => faviconDomain(slot.domain)));
+  const domains = uniqueItems((config.slots || []).map((slot) => faviconDomain(slot.iconDomain || slot.domain)));
 
   for (const domain of domains) {
     const iconUrl = await downloadFavicon(domain, cacheDir);
@@ -143,7 +158,7 @@ async function hydrateFavicons(config, outputDir) {
   return {
     ...config,
     slots: (config.slots || []).map((slot) => {
-      const domain = faviconDomain(slot.domain);
+      const domain = faviconDomain(slot.iconDomain || slot.domain);
       const iconUrl = iconUrls.get(domain);
       return iconUrl ? { ...slot, iconUrl } : slot;
     })
@@ -236,6 +251,276 @@ async function writeScreenshot(htmlPath, outputDir, browserPath) {
   throw new Error(`Screenshot command failed.\n${failures.at(-1) || "No browser attempts completed."}`);
 }
 
+async function waitForFile(filePath, timeoutMs = 8000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (existsSync(filePath)) return;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+async function connectToCdp(webSocketUrl) {
+  const socket = new WebSocket(webSocketUrl);
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Timed out connecting to Chrome DevTools.")), 8000);
+    socket.addEventListener("open", () => {
+      clearTimeout(timeout);
+      resolve();
+    }, { once: true });
+    socket.addEventListener("error", () => {
+      clearTimeout(timeout);
+      reject(new Error("Could not connect to Chrome DevTools."));
+    }, { once: true });
+  });
+
+  let messageId = 0;
+  const pending = new Map();
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (!message.id || !pending.has(message.id)) return;
+    const { resolve, reject } = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) {
+      reject(new Error(`${message.error.message}${message.error.data ? `: ${message.error.data}` : ""}`));
+      return;
+    }
+    resolve(message.result);
+  });
+
+  function send(method, params = {}) {
+    const id = ++messageId;
+    socket.send(JSON.stringify({ id, method, params }));
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (!pending.has(id)) return;
+        pending.delete(id);
+        reject(new Error(`Chrome DevTools command timed out: ${method}`));
+      }, 30000);
+      pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        }
+      });
+    });
+  }
+
+  return { send, close: () => socket.close() };
+}
+
+async function launchCdpBrowser(browserPath) {
+  const browsers = findBrowsers(browserPath);
+  if (browsers.length === 0) {
+    throw new Error("Could not find Chrome or Edge. Pass --browser \"C:\\\\Path\\\\to\\\\chrome.exe\" to enable video export.");
+  }
+
+  async function closeChild(child) {
+    if (!child.killed) {
+      try { child.kill(); } catch {}
+    }
+    await Promise.race([
+      new Promise((resolve) => child.once("exit", resolve)),
+      delay(2000)
+    ]);
+  }
+
+  async function removeProfileDir(profileDir) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await rm(profileDir, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        if (error.code !== "EBUSY" && error.code !== "EPERM") throw error;
+        await delay(250 + attempt * 250);
+      }
+    }
+  }
+
+  const attempts = [];
+  for (const browser of browsers) {
+    const profileDir = await mkdtemp(path.join(tmpdir(), "browser-tycoon-video-"));
+    const child = spawn(browser, [
+      "--headless=new",
+      "--disable-background-networking",
+      "--disable-dev-shm-usage",
+      "--disable-extensions",
+      "--disable-gpu",
+      "--disable-gpu-compositing",
+      "--disable-sync",
+      "--hide-scrollbars",
+      "--no-first-run",
+      "--no-sandbox",
+      "--remote-debugging-port=0",
+      "--run-all-compositor-stages-before-draw",
+      "--use-angle=swiftshader",
+      `--user-data-dir=${profileDir}`,
+      `--window-size=${POPUP_WIDTH},${POPUP_HEIGHT}`,
+      "about:blank"
+    ], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+
+    try {
+      const portFile = path.join(profileDir, "DevToolsActivePort");
+      await waitForFile(portFile);
+      const [port] = (await readFile(portFile, "utf8")).trim().split(/\r?\n/);
+      const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const pageTarget = targets.find((target) => target.type === "page" && target.webSocketDebuggerUrl);
+      if (!pageTarget) throw new Error("Chrome did not expose a debuggable page target.");
+      const client = await connectToCdp(pageTarget.webSocketDebuggerUrl);
+      return {
+        client,
+        close: async () => {
+          try { client.close(); } catch {}
+          await closeChild(child);
+          await removeProfileDir(profileDir);
+        }
+      };
+    } catch (error) {
+      attempts.push(`${browser}: ${error.message}`);
+      await closeChild(child);
+      await removeProfileDir(profileDir);
+    }
+  }
+
+  throw new Error(`Could not launch Chrome or Edge for video export.\n${attempts.join("\n")}`);
+}
+
+async function waitForPageReady(client) {
+  for (let index = 0; index < 80; index += 1) {
+    const result = await client.send("Runtime.evaluate", {
+      expression: "typeof window.setMarketingVideoSecond === 'function'",
+      returnByValue: true
+    });
+    if (result.result?.value) return;
+    await delay(100);
+  }
+  const debug = await client.send("Runtime.evaluate", {
+    expression: "JSON.stringify({ href: location.href, title: document.title, readyState: document.readyState, hook: typeof window.setMarketingVideoSecond, body: document.body ? document.body.innerText.slice(0, 200) : '' })",
+    returnByValue: true
+  });
+  throw new Error(`Generated marketing page did not become ready for video capture: ${debug.result?.value || "no page details"}`);
+}
+
+async function captureVideoFrames(client, htmlPath, durationSeconds) {
+  const frameCount = Math.max(1, Math.ceil(durationSeconds * VIDEO_FPS));
+  const frames = [];
+  const url = `${pathToFileURL(htmlPath).href}?screenshot=1&video=1`;
+
+  await client.send("Page.enable");
+  await client.send("Runtime.enable");
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: POPUP_WIDTH,
+    height: POPUP_HEIGHT,
+    deviceScaleFactor: 1,
+    mobile: false
+  });
+  await client.send("Page.navigate", { url });
+  await waitForPageReady(client);
+
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const second = frame / VIDEO_FPS;
+    await client.send("Runtime.evaluate", {
+      expression: `window.setMarketingVideoSecond(${second})`,
+      awaitPromise: true,
+      returnByValue: true
+    });
+    await delay(35);
+    const screenshot = await client.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false
+    });
+    frames.push(screenshot.data);
+  }
+
+  return frames;
+}
+
+async function encodeFramesInBrowser(client, frames) {
+  const expression = `
+    (async ({ frames, width, height, fps }) => {
+      if (!("MediaRecorder" in window)) throw new Error("MediaRecorder is unavailable in this browser.");
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d", { alpha: false });
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+        ? "video/webm;codecs=vp9"
+        : (MediaRecorder.isTypeSupported("video/webm;codecs=vp8") ? "video/webm;codecs=vp8" : "video/webm");
+      const stream = canvas.captureStream(fps);
+      const chunks = [];
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2500000 });
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) chunks.push(event.data);
+      };
+      const stopped = new Promise((resolve, reject) => {
+        recorder.onstop = resolve;
+        recorder.onerror = () => reject(recorder.error || new Error("MediaRecorder failed."));
+      });
+      function drawFrame(data) {
+        return new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => {
+            context.drawImage(image, 0, 0, width, height);
+            resolve();
+          };
+          image.onerror = () => reject(new Error("Could not load captured frame."));
+          image.src = "data:image/png;base64," + data;
+        });
+      }
+      recorder.start();
+      const frameMs = 1000 / fps;
+      for (const frame of frames) {
+        await drawFrame(frame);
+        await new Promise((resolve) => setTimeout(resolve, frameMs));
+      }
+      recorder.stop();
+      await stopped;
+      stream.getTracks().forEach((track) => track.stop());
+      const blob = new Blob(chunks, { type: mimeType });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let index = 0; index < bytes.length; index += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+      }
+      return btoa(binary);
+    })(${JSON.stringify({ frames, width: POPUP_WIDTH, height: POPUP_HEIGHT, fps: VIDEO_FPS })})
+  `;
+  const result = await client.send("Runtime.evaluate", {
+    expression,
+    awaitPromise: true,
+    returnByValue: true
+  });
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.text || "Video encoding failed in Chrome.");
+  }
+  return result.result.value;
+}
+
+async function writeVideo(htmlPath, outputDir, browserPath, durationSeconds = DEFAULT_VIDEO_SECONDS) {
+  const videosDir = path.join(outputDir, "videos");
+  await mkdir(videosDir, { recursive: true });
+  const videoPath = path.join(videosDir, `browser-tycoon-live-${timestamp()}.webm`);
+  const browser = await launchCdpBrowser(browserPath);
+
+  try {
+    const frames = await captureVideoFrames(browser.client, htmlPath, durationSeconds);
+    const videoBase64 = await encodeFramesInBrowser(browser.client, frames);
+    await writeFile(videoPath, Buffer.from(videoBase64, "base64"));
+    return videoPath;
+  } finally {
+    await browser.close();
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const configPath = resolveConfigPath(args.config || args.preset);
@@ -263,6 +548,12 @@ async function main() {
   if (args.screenshot) {
     const screenshotPath = await writeScreenshot(htmlPath, outputDir, args.browser);
     console.log(`Screenshot: ${screenshotPath}`);
+  }
+
+  if (args.video) {
+    const durationSeconds = Math.max(0.1, Number(args["video-seconds"] || DEFAULT_VIDEO_SECONDS));
+    const videoPath = await writeVideo(htmlPath, outputDir, args.browser, durationSeconds);
+    console.log(`Video: ${videoPath}`);
   }
 
   if (args.open) {

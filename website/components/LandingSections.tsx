@@ -7,6 +7,7 @@ import {
 import { CTAButton } from "./CTAButton";
 import { ChromeIcon } from "./Icons";
 import { UnifiedProductPreview } from "./UnifiedProductPreview";
+import { CHROME_WEB_STORE_URL } from "../lib/links";
 
 const features = [
   { title: "Upgrade Domains", copy: "Turn everyday sites into powerful income engines and push every domain further.", icon: ArrowTrendingUpIcon },
@@ -50,7 +51,7 @@ export function LandingSections() {
           <h2>The web is waiting.</h2>
           <p>Install Browser Tycoon and start building your empire today.</p>
           <div className="mt-8 w-full max-w-[330px]">
-            <CTAButton tone="cyan" icon={<ChromeIcon />}>ADD TO CHROME</CTAButton>
+            <CTAButton tone="cyan" href={CHROME_WEB_STORE_URL} icon={<ChromeIcon />}>ADD TO CHROME</CTAButton>
           </div>
           <span className="cta-caption">Free to play. No signup required.</span>
         </div>

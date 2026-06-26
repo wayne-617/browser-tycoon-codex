@@ -78,7 +78,7 @@ export function renderMarketingPage(config, paths) {
   <main class="builder">
     <section class="controls panel">
       <h1>Browser Tycoon Screenshot Generator</h1>
-      <p>Adjust the mock Slots tab state, then use the preview or run the CLI with <code>--screenshot</code> for a PNG.</p>
+      <p>Adjust the mock popup state, then use the CLI with <code>--screenshot</code> for a PNG or <code>--video</code> for a 3 second WebM.</p>
       <div class="form-grid">
         <label>Preset
           <select id="presetSelect">
@@ -188,7 +188,9 @@ export function renderMarketingPage(config, paths) {
     const fallbackIconUrl = ${JSON.stringify(fallbackIconUrl)};
     const initialConfig = ${initialConfig};
     const presets = ${jsonScript(builtInPresets())};
-    const screenshotMode = new URLSearchParams(location.search).get("screenshot") === "1";
+    const pageParams = new URLSearchParams(location.search);
+    const screenshotMode = pageParams.get("screenshot") === "1";
+    const videoInitialSecond = Math.max(0, Number(pageParams.get("videoSecond") || 0));
     const activeUpgradeDefs = [
       { id: "trafficEngine", name: "Traffic Engine", baseCost: 25, growth: 1.35, icon: 26 },
       { id: "tabMultiplier", name: "Tab Multiplier", baseCost: 35, growth: 1.5, icon: 13 },
@@ -198,6 +200,11 @@ export function renderMarketingPage(config, paths) {
     if (screenshotMode) document.body.classList.add("screenshot-mode");
 
     let currentConfig = normalizeConfig(initialConfig);
+    const videoBaseMoney = currentConfig.money;
+    const videoIncomePerSecond = currentConfig.incomePerSecond;
+    if (videoInitialSecond > 0) {
+      currentConfig.money = videoBaseMoney + videoIncomePerSecond * videoInitialSecond;
+    }
     currentConfig = currentConfig.balanceIncome ? reconcileIncome(currentConfig) : currentConfig;
 
     function escapeHtml(value) {
@@ -239,7 +246,7 @@ export function renderMarketingPage(config, paths) {
 
     function slotUnlockCost(slotNumber) {
       if (slotNumber <= 3) return 0;
-      return floorToSignificantFigures(1000 * Math.pow(100, Math.max(0, slotNumber - 4)));
+      return floorToSignificantFigures(10000 * Math.pow(100, Math.max(0, slotNumber - 4)));
     }
 
     function upgradeCost(def, level) {
@@ -292,7 +299,18 @@ export function renderMarketingPage(config, paths) {
       if (!cleaned) return [fallbackIconUrl];
       const encodedDomain = encodeURIComponent(cleaned);
       const encodedPage = encodeURIComponent("https://" + cleaned);
+      const overrides = {
+        "mail.google.com": [
+          "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico",
+          "https://www.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"
+        ],
+        "claude.ai": [
+          "https://claude.ai/favicon.ico",
+          "https://claude.ai/favicon-32x32.png"
+        ]
+      };
       return [
+        ...(overrides[cleaned] || []),
         "https://" + cleaned + "/favicon.ico",
         "https://www.google.com/s2/favicons?sz=64&domain_url=" + encodedPage,
         "https://www.google.com/s2/favicons?sz=64&domain=" + encodedDomain,
@@ -302,13 +320,15 @@ export function renderMarketingPage(config, paths) {
     }
 
     function faviconAttrs(slot) {
-      const sources = slot.iconUrl ? [slot.iconUrl, ...faviconSources(slot.domain)] : faviconSources(slot.domain);
+      const iconDomain = slot.iconDomain || slot.domain;
+      const sources = slot.iconUrl ? [slot.iconUrl, ...faviconSources(iconDomain)] : faviconSources(iconDomain);
       return 'src="' + escapeHtml(sources[0]) + '" data-favicon-index="0" data-favicon-sources="' + escapeHtml(JSON.stringify(sources)) + '" onerror="advanceFavicon(this)"';
     }
 
     function normalizeSlot(slot = {}) {
       return {
         domain: String(slot.domain || "").trim(),
+        iconDomain: String(slot.iconDomain || "").trim(),
         iconUrl: String(slot.iconUrl || "").trim(),
         tier: Math.max(0, Math.min(5, Math.floor(Number(slot.tier || 0)))),
         state: ["active", "background", "inactive"].includes(slot.state) ? slot.state : "inactive",
@@ -548,6 +568,37 @@ export function renderMarketingPage(config, paths) {
       updateIncomeGuard();
     }
 
+    function waitForPreviewImages(timeoutMs = 1800) {
+      const frame = document.getElementById("previewFrame");
+      const started = Date.now();
+      return new Promise((resolve) => {
+        function ready() {
+          const doc = frame.contentDocument;
+          if (!doc) return false;
+          const images = [...doc.querySelectorAll("img")];
+          return images.every((image) => image.complete && image.naturalWidth > 0);
+        }
+        function tick() {
+          if (ready() || Date.now() - started >= timeoutMs) {
+            resolve(true);
+            return;
+          }
+          setTimeout(tick, 50);
+        }
+        frame.addEventListener("load", tick, { once: true });
+        tick();
+      });
+    }
+
+    window.setMarketingVideoSecond = (second) => new Promise((resolve) => {
+      const elapsed = Math.max(0, Number(second || 0));
+      currentConfig.money = videoBaseMoney + videoIncomePerSecond * elapsed;
+      renderPreview();
+      requestAnimationFrame(() => {
+        waitForPreviewImages().then(() => resolve(true));
+      });
+    });
+
     function writeForm() {
       document.getElementById("screenInput").value = currentConfig.screen;
       document.getElementById("moneyInput").value = currentConfig.money;
@@ -688,7 +739,7 @@ function builtInPresets() {
       slotsUnlocked: 4,
       slots: [
         { domain: "youtube.com", tier: 0, state: "active", incomePerSecond: 2010, vaultAmount: 65400, vaultFull: true, streak: 3, checkedToday: true },
-        { domain: "gmail.com", tier: 0, state: "background", incomePerSecond: 573, vaultAmount: 12400, vaultFull: false, streak: 2, checkedToday: true },
+        { domain: "gmail.com", iconDomain: "mail.google.com", tier: 0, state: "background", incomePerSecond: 573, vaultAmount: 12400, vaultFull: false, streak: 2, checkedToday: true },
         { domain: "reddit.com", tier: 0, state: "inactive", incomePerSecond: 0, vaultAmount: 90, vaultFull: false, streak: 1, checkedToday: false },
         { domain: "claude.ai", tier: 0, state: "inactive", incomePerSecond: 0, vaultAmount: 0, vaultFull: false, streak: 0, checkedToday: false }
       ]

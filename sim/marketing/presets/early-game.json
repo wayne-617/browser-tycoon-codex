@@ -17,6 +17,7 @@
     },
     {
       "domain": "gmail.com",
+      "iconDomain": "mail.google.com",
       "tier": 0,
       "state": "background",
       "incomePerSecond": 573,
